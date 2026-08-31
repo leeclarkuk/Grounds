@@ -8,6 +8,8 @@ Clock authority: PostgreSQL `now()` for lease expiry, grant expiry, freshness an
 
 `cases` and `outbox` exist. Builds 0 and 1 write no case rows and no outbox rows.
 
+The migrator owns `schema_migrations` (`id text primary key`, `applied_at timestamptz not null`). It is not a domain table. See [ADR-0006](../decisions/0006-build-0-implementation.md).
+
 ## Tables
 
 ### profile_versions
@@ -67,8 +69,8 @@ Trigger: the only permitted update is `consumed_at` from null to a timestamp. Al
 - `evidence_window_to` timestamptz not null
 - `detector_versions` jsonb not null
 - `state` text not null check (state in (
-    'queued', 'collecting', 'evaluating',
-    'healthy', 'findings', 'failed', 'cancelled'
+  'queued', 'collecting', 'evaluating',
+  'healthy', 'findings', 'failed', 'cancelled'
   ))
 - `result` text null check (result is null or result in ('PASS', 'FAIL', 'UNKNOWN'))
 - `client_idempotency_key` text not null unique
@@ -77,22 +79,29 @@ Trigger: the only permitted update is `consumed_at` from null to a timestamp. Al
 - `cancel_requested_at` timestamptz null
 - `collector_attempt_count` integer not null default 0 check (collector_attempt_count >= 0)
 - `created_at` timestamptz not null default now()
+- `started_at` timestamptz null
 - `updated_at` timestamptz not null default now()
 - `terminal_at` timestamptz null
 
 Check `evidence_window_from < evidence_window_to`.
 Check correlated terminal truth:
 
-- `state = 'healthy'` implies `result = 'PASS'` and `terminal_at` is not null
-- `state = 'findings'` implies `result in ('FAIL', 'UNKNOWN')` and `terminal_at` is not null
-- `state in ('queued', 'collecting', 'evaluating')` implies `result` is null and `terminal_at` is null
-- `state in ('failed', 'cancelled')` implies `result` is null and `terminal_at` is not null
+- `state = 'queued'` implies `started_at` is null, `result` is null and `terminal_at` is null
+- `state in ('collecting', 'evaluating')` implies `started_at` is not null, `result` is null and `terminal_at` is null
+- `state = 'healthy'` implies `started_at` is not null, `result = 'PASS'` and `terminal_at` is not null
+- `state = 'findings'` implies `started_at` is not null, `result in ('FAIL', 'UNKNOWN')` and `terminal_at` is not null
+- `state = 'failed'` implies `started_at` is not null, `result` is null and `terminal_at` is not null
+- `state = 'cancelled'` implies `result` is null, `terminal_at` is not null, and `started_at` is null when cancelled from `queued`
+
+`started_at` is set exactly once with PostgreSQL `now()` on `queued → collecting`. Duration remains `terminal_at - created_at`.
 
 `pending_authorisation` is not persisted in Builds 0 and 1.
 Unique `(id, organisation_id)` and unique `(id, profile_version_id)`.
 Foreign key `(profile_version_id, organisation_id)` references `profile_versions (id, organisation_id)`.
 Foreign key `(authorisation_grant_id, organisation_id, profile_version_id)` references `authorisation_grants (id, organisation_id, profile_version_id)`.
-Trigger: run `resource_scope_digest`, evidence window, `organisation_id`, `profile_version_id` and `detector_versions` must equal the consumed grant.
+Trigger: on insert and update, run `resource_scope`, `resource_scope_digest`, evidence window, `organisation_id`, `profile_version_id` and `detector_versions` must equal the consumed grant. `resource_scope` is compared as JSON equality, not digest-only.
+
+Trigger: after insert, organisation, profile version, grant id, resource scope, scope digest, evidence window, detector versions, client idempotency key, request digest, run identity digest and `created_at` are immutable. `started_at` may change only from null to a timestamp.
 
 ### run_steps
 
@@ -106,9 +115,16 @@ Trigger: run `resource_scope_digest`, evidence window, `organisation_id`, `profi
 - `lease_expires_at` timestamptz null
 - `lease_epoch` bigint not null default 0 check (lease_epoch >= 0)
 - `error_class` text null check (error_class is null or error_class in (
-    'attempts_exhausted', 'persist_failure', 'invariant_violation', 'cancelled'
+  'attempts_exhausted', 'persist_failure', 'invariant_violation', 'cancelled'
   ))
 - `error_message` text null
+
+Check: `error_class` and `error_message` are both null, or they match exactly one pair:
+
+- `attempts_exhausted` / `step attempts exhausted`
+- `persist_failure` / `durable persist failed`
+- `invariant_violation` / `orchestration invariant violated`
+- `cancelled` / `run cancelled`
 - `updated_at` timestamptz not null default now()
 
 Unique `(run_id, step_type)`.
