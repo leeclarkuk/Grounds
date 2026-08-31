@@ -79,6 +79,12 @@ function detectorVersionsFrom(value: unknown): { readonly [id: string]: string }
   return out;
 }
 
+function requireSingleUpdate(rowCount: number | null): void {
+  if (rowCount !== 1) {
+    throw new FenceLostError();
+  }
+}
+
 function mapProfile(row: QueryResultRow): ProfileVersion {
   const freshness = asJsonObject(row['freshness_policy']);
   const freshnessMaxAgeSeconds = freshness['freshnessMaxAgeSeconds'];
@@ -736,17 +742,17 @@ class PostgresTx implements OrchestrationTx {
        WHERE id = $1 AND lease_owner = $2 AND lease_epoch = $3 AND state = 'leased'`,
       [fence.step.id, workerId, leaseEpoch],
     );
-    if ((completed.rowCount ?? 0) !== 1) {
-      throw new FenceLostError();
-    }
-    await this.client.query(
+    requireSingleUpdate(completed.rowCount);
+    const evaluateReady = await this.client.query(
       `UPDATE run_steps SET state = 'ready', updated_at = now() WHERE run_id = $1 AND step_type = 'evaluate' AND state = 'blocked'`,
       [fence.run.id],
     );
-    await this.client.query(
+    requireSingleUpdate(evaluateReady.rowCount);
+    const evaluating = await this.client.query(
       `UPDATE assurance_runs SET state = 'evaluating', updated_at = now() WHERE id = $1 AND state = 'collecting'`,
       [fence.run.id],
     );
+    requireSingleUpdate(evaluating.rowCount);
   }
 
   public async completeEvaluate(
@@ -759,18 +765,20 @@ class PostgresTx implements OrchestrationTx {
     },
   ): Promise<void> {
     this.assertFence(fence, workerId, leaseEpoch, 'evaluate');
-    await this.client.query(
+    const completed = await this.client.query(
       `UPDATE run_steps
        SET state = 'succeeded', lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
        WHERE id = $1 AND lease_owner = $2 AND lease_epoch = $3 AND state = 'leased'`,
       [fence.step.id, workerId, leaseEpoch],
     );
-    await this.client.query(
+    requireSingleUpdate(completed.rowCount);
+    const terminal = await this.client.query(
       `UPDATE assurance_runs
        SET state = $2, result = $3, terminal_at = now(), updated_at = now()
        WHERE id = $1 AND state = 'evaluating'`,
       [fence.run.id, outcome.state, outcome.result],
     );
+    requireSingleUpdate(terminal.rowCount);
   }
 
   public async failStep(
@@ -780,7 +788,7 @@ class PostgresTx implements OrchestrationTx {
     errorClass: ErrorClass,
   ): Promise<void> {
     this.assertFence(fence, workerId, leaseEpoch, fence.step.stepType);
-    await this.client.query(
+    const failed = await this.client.query(
       `UPDATE run_steps
        SET state = 'failed',
            error_class = $4,
@@ -791,12 +799,14 @@ class PostgresTx implements OrchestrationTx {
        WHERE id = $1 AND lease_owner = $2 AND lease_epoch = $3 AND state = 'leased'`,
       [fence.step.id, workerId, leaseEpoch, errorClass, errorMessageFor(errorClass)],
     );
-    await this.client.query(
+    requireSingleUpdate(failed.rowCount);
+    const terminal = await this.client.query(
       `UPDATE assurance_runs
        SET state = 'failed', terminal_at = now(), updated_at = now()
        WHERE id = $1 AND state IN ('collecting', 'evaluating')`,
       [fence.run.id],
     );
+    requireSingleUpdate(terminal.rowCount);
   }
 
   public async scheduleRetry(
@@ -806,7 +816,7 @@ class PostgresTx implements OrchestrationTx {
   ): Promise<void> {
     this.assertFence(fence, workerId, leaseEpoch, fence.step.stepType);
     const delay = backoffSeconds(fence.step.attempt);
-    await this.client.query(
+    const retried = await this.client.query(
       `UPDATE run_steps
        SET state = 'ready',
            lease_owner = NULL,
@@ -816,6 +826,7 @@ class PostgresTx implements OrchestrationTx {
        WHERE id = $1 AND lease_owner = $2 AND lease_epoch = $3 AND state = 'leased' AND attempt < $5`,
       [fence.step.id, workerId, leaseEpoch, delay, MAX_STEP_ATTEMPTS],
     );
+    requireSingleUpdate(retried.rowCount);
   }
 
   public async cancelCollect(runId: string): Promise<AssuranceRun> {

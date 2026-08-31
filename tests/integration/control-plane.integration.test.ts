@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   CancelRun,
   EnqueueRun,
   GrantNotConsumableError,
+  HeartbeatLease,
   IdempotencyConflictError,
 } from '@grounds/application';
-import { ERROR_MESSAGES, FAKE_INVENTORY_KIND } from '@grounds/domain';
+import { ERROR_CLASSES, ERROR_MESSAGES, FAKE_INVENTORY_KIND } from '@grounds/domain';
 import {
   appliedMigrationIds,
   isSchemaReady,
@@ -235,6 +238,7 @@ describe('Build 0 control plane', () => {
     const recovered = await db.store.withTransaction((tx) => tx.claimWork('fresh', 15));
     expect(recovered?.recovered).toBe(true);
     expect(recovered?.step.leaseEpoch).toBeGreaterThan(first.step.leaseEpoch);
+    expect(recovered?.run.startedAt).toBe(first.run.startedAt);
     await expect(
       db.store.withTransaction((tx) =>
         tx.requireFence({
@@ -356,6 +360,7 @@ describe('Build 0 control plane', () => {
     const run = await db.store.getRun(seeded.run.id);
     expect(run?.state === 'healthy' || run?.state === 'findings').toBe(true);
     const observations = await db.store.listObservations(seeded.run.id);
+    expect(observations).toHaveLength(afterCrash.length);
     const identities = observations.map((item) => item.contentIdentity);
     expect(new Set(identities).size).toBe(identities.length);
     const findings = await db.store.listFindings(seeded.run.id);
@@ -380,6 +385,94 @@ describe('Build 0 control plane', () => {
     const result = await runToTerminal(new FakeInventory('fail'));
     expect(result.run.state).toBe('findings');
     expect(result.run.result).toBe('FAIL');
+  });
+
+  it('returns cited UNKNOWN when required inventory is truncated', async () => {
+    const result = await runToTerminal(new FakeInventory('huge'));
+    expect(result.run.state).toBe('findings');
+    expect(result.run.result).toBe('UNKNOWN');
+    const observations = await db.store.listObservations(result.run.id);
+    expect(observations.some((item) => item.kind === FAKE_INVENTORY_KIND && item.truncated)).toBe(
+      true,
+    );
+    const findings = await db.store.listFindings(result.run.id);
+    expect(findings[0]?.result).toBe('UNKNOWN');
+    expect(findings[0]?.observationIds.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('heartbeats keep a live lease from being stolen', async () => {
+    await enqueueRun();
+    const claimed = await db.store.withTransaction((tx) => tx.claimWork('keeper', 1));
+    if (!claimed) {
+      throw new Error('expected claim');
+    }
+    const kept = await new HeartbeatLease(db.store).execute(
+      claimed.step.id,
+      'keeper',
+      claimed.step.leaseEpoch,
+      15,
+    );
+    expect(kept).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const stolen = await db.store.withTransaction((tx) => tx.claimWork('thief', 15));
+    expect(stolen).toBeUndefined();
+    const step = await db.store.getStep(claimed.run.id, 'collect');
+    expect(step?.leaseOwner).toBe('keeper');
+    expect(step?.leaseEpoch).toBe(claimed.step.leaseEpoch);
+  });
+
+  it('accepts every closed error_class pair and rejects mixed or secret text', async () => {
+    const seeded = await enqueueRun();
+    for (const errorClass of ERROR_CLASSES) {
+      await db.pool.query(
+        `UPDATE run_steps SET error_class = $1, error_message = $2 WHERE run_id = $3 AND step_type = 'collect'`,
+        [errorClass, ERROR_MESSAGES[errorClass], seeded.run.id],
+      );
+    }
+    await expect(
+      db.pool.query(
+        `UPDATE run_steps SET error_class = 'persist_failure', error_message = 'step attempts exhausted' WHERE run_id = $1`,
+        [seeded.run.id],
+      ),
+    ).rejects.toThrow();
+    await expect(
+      db.pool.query(
+        `UPDATE run_steps SET error_class = 'persist_failure', error_message = 'AKIASECRET' WHERE run_id = $1`,
+        [seeded.run.id],
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('rejects substituting an equivalent unused grant onto a run', async () => {
+    const seeded = await db.store.withTransaction((tx) => seedProfileAndGrant(tx));
+    const run = await new EnqueueRun(db.store).execute({
+      grantId: seeded.grant.id,
+      clientIdempotencyKey: randomUUID(),
+      requestDigest: randomUUID(),
+    });
+    const other = await db.store.withTransaction((tx) =>
+      tx.insertGrant({
+        id: randomUUID(),
+        organisationId: seeded.grant.organisationId,
+        actorId: seeded.grant.actorId,
+        profileVersionId: seeded.grant.profileVersionId,
+        resourceScope: seeded.grant.resourceScope,
+        resourceScopeDigest: seeded.grant.resourceScopeDigest,
+        evidenceWindow: seeded.grant.evidenceWindow,
+        detectorVersions: seeded.grant.detectorVersions,
+        grantedAt: seeded.grant.grantedAt,
+        expiresAt: seeded.grant.expiresAt,
+        consumedAt: null,
+        clientIdempotencyKey: randomUUID(),
+        requestDigest: randomUUID(),
+      }),
+    );
+    await expect(
+      db.pool.query(`UPDATE assurance_runs SET authorisation_grant_id = $1 WHERE id = $2`, [
+        other.id,
+        run.id,
+      ]),
+    ).rejects.toThrow(/immutable/);
   });
 
   it('isolates organisations in queries and digests', async () => {
@@ -517,5 +610,27 @@ describe('Build 0 control plane', () => {
     expect(unavailable.statusCode).toBe(503);
     await down.app.close();
     await migrateUp(db.pool);
+  });
+
+  it('reports not ready after only the migrations ledger is applied', async () => {
+    await migrateDown(db.pool);
+    const ledger = readFileSync(
+      join(process.cwd(), 'migrations/0001_schema_migrations.up.sql'),
+      'utf8',
+    );
+    await db.pool.query(ledger);
+    await db.pool.query(
+      `INSERT INTO schema_migrations (id) VALUES ('0001_schema_migrations') ON CONFLICT DO NOTHING`,
+    );
+    expect(await isSchemaReady(db.pool)).toBe(false);
+    const { app } = await buildApi({
+      databaseUrl: db.url,
+      identityMode: 'development',
+    });
+    const partial = await app.inject({ method: 'GET', url: '/health/ready' });
+    expect(partial.statusCode).toBe(503);
+    await app.close();
+    await migrateUp(db.pool);
+    expect(await isSchemaReady(db.pool)).toBe(true);
   });
 });
