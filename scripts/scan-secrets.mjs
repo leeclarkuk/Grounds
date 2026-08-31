@@ -33,11 +33,7 @@ for (const root of ROOTS) {
     }
     const text = readFileSync(file, 'utf8');
     for (const pattern of FORBIDDEN) {
-      if (
-        pattern.test(text) &&
-        !file.includes('redaction') &&
-        !file.includes('scan-secrets')
-      ) {
+      if (pattern.test(text) && !file.includes('redaction') && !file.includes('scan-secrets')) {
         process.stderr.write(`${file} matched ${String(pattern)}\n`);
         failed = true;
       }
