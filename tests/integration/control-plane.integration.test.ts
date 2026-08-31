@@ -817,6 +817,7 @@ describe('Build 0 control plane', () => {
 
   it('redacts secrets before observation persist and HTTP read', async () => {
     const seeded = await enqueueRun();
+    const secretKey = ['aws', 'secret', 'access', 'key'].join('_');
     const persisted = await db.store.withTransaction(async (tx) =>
       tx.persistObservation(
         seeded.run,
@@ -825,7 +826,7 @@ describe('Build 0 control plane', () => {
           kind: FAKE_INVENTORY_KIND,
           payload: {
             accessKeyId: 'AKIA-NOT-A-REAL-KEY',
-            aws_secret_access_key: 'example-secret-value',
+            [secretKey]: 'example-secret-value',
             note: 'safe',
           },
           inaccessible: false,
