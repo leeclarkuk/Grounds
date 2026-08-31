@@ -7,3 +7,5 @@ Build 0 and Build 1 design artefacts. Binding product rules live in [Grounds-Bui
 - [Threat model](../threat-model.md)
 
 Build 0 implementation amendments: [ADR-0006](../decisions/0006-build-0-implementation.md).
+
+Build 1 implementation amendments: [ADR-0007](../decisions/0007-build-1-implementation.md).
