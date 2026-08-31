@@ -244,13 +244,17 @@ stateDiagram-v2
     queued --> collecting: lease acquired
     collecting --> evaluating: evidence complete
     evaluating --> healthy: all pass
-    evaluating --> findings: any fail
+    evaluating --> findings: any fail or unknown
     collecting --> failed: terminal error
     evaluating --> failed: terminal error
     pending_authorisation --> cancelled
     queued --> cancelled
     collecting --> cancelled
 ```
+
+`healthy` is only for an evaluation where every pinned detector returned `PASS`. `findings` is the terminal state when evaluation completed and at least one detector returned `FAIL` or `UNKNOWN`. An UNKNOWN-only run, including the required partial-collector-failure scenario, must leave `evaluating` as `findings`. It must not remain in `evaluating` and must not be labelled `healthy`.
+
+The run result summary is `FAIL` if any detector returned `FAIL`, else `UNKNOWN` if any returned `UNKNOWN`, else `PASS`. `failed` remains an orchestration fault, not a missing-evidence outcome.
 
 ### Assurance case, reserved for later milestones
 
@@ -283,7 +287,14 @@ stateDiagram-v2
 | `events` | Append-only state and audit events with per-aggregate sequence |
 | `outbox` | Durable external intent; schema and fake reconciler in Build 0 |
 
-Database constraints must enforce uniqueness for run idempotency, observation content identity, finding fingerprint and outbox idempotency.
+Database constraints must enforce uniqueness for:
+
+- run idempotency;
+- observation content identity per run `(run_id, content_identity)`;
+- finding fingerprint per run `(run_id, fingerprint)`;
+- outbox idempotency.
+
+Finding fingerprints are not globally unique. The same fingerprint may appear on later authorised runs so each run keeps its own detector results and evidence citations. Case deduplication, when that workflow is authorised, uses `(organisation_id, fingerprint)` on `cases`. Builds 0 and 1 do not write cases.
 
 ### Concurrency rules
 
@@ -328,13 +339,27 @@ Build 1 requires an allowlist drawn only from:
 - `cloudwatch:GetMetricData`
 - `sts:GetCallerIdentity`
 
+The worker may also call `sts:AssumeRole` in the control account to obtain the short target-account session. That is credential bootstrap, not a collector, and it is not granted on the target role.
+
 If resource-level IAM constraints are unavailable for an operation, constrain by account/region role, explicit application scope, request validation and post-response resource matching. A response containing an out-of-scope resource is rejected rather than filtered silently.
 
-The adapter must not import state-changing AWS commands. Add an architecture test that rejects imports matching create, put, update, delete, register, deregister, run, start, stop, terminate, modify, set or tag command families within `adapter-aws`.
+`adapter-aws` may statically import only this exact command set:
+
+- `DescribeServicesCommand`
+- `ListTasksCommand`
+- `DescribeTasksCommand`
+- `DescribeTargetGroupsCommand`
+- `DescribeTargetHealthCommand`
+- `DescribeAlarmsCommand`
+- `GetMetricDataCommand`
+- `GetCallerIdentityCommand`
+- `AssumeRoleCommand` (worker credential bootstrap only)
+
+The architecture test must accept only those identifiers. It must reject any other `*Command`, wildcard imports, `export *` from `@aws-sdk/*`, and dynamic `import()` of `@aws-sdk/*`. A family denylist is not sufficient: `EnableAlarmActionsCommand` and `DisableAlarmActionsCommand` match none of create, put, update, delete, register, deregister, run, start, stop, terminate, modify, set or tag, and would pass that test.
 
 ## 11. First vertical scenario
 
-An ECS service repeatedly replaces unhealthy tasks because its load balancer health check receives an unacceptable response on the configured health path. The service also lacks an effective owner-notifying alarm for unhealthy targets or a persistent running-task deficit.
+An ECS service repeatedly replaces unhealthy tasks because its load balancer health check receives an unacceptable response on the configured health path. The service also lacks a covering CloudWatch alarm with a configured notification action for unhealthy targets or a persistent running-task deficit.
 
 Grounds must:
 
@@ -360,9 +385,11 @@ The finding may say the health-check contract is failing. It must not claim a mi
 
 Return `UNKNOWN` when any required evidence is absent, stale, inaccessible or internally contradictory.
 
-### `GRD-OBS-001` — Missing effective owner notification
+### `GRD-OBS-001` — Missing configured notification action
 
-Return `FAIL` when no enabled CloudWatch alarm in scope covers either unhealthy target count or sustained desired/running task deficit with at least one configured notification action.
+Return `FAIL` when alarm inventory is complete and no enabled CloudWatch alarm in scope covers either unhealthy target count or sustained desired/running task deficit with at least one configured notification action (a non-empty `AlarmActions` ARN).
+
+The finding may say no covering alarm has a configured notification action. It must not claim that an owner is notified, that an SNS topic has subscriptions, or that a human will receive the alarm. `DescribeAlarms` cannot prove delivery. Builds 0 and 1 do not call SNS and do not collect subscription or owner-linkage evidence.
 
 Do not accept CPU utilisation alone as coverage for task health. Return `UNKNOWN` if alarm inventory cannot be read completely.
 
@@ -439,7 +466,7 @@ Required metrics:
 - Crash after observation insert and before step completion is safely replayed.
 - Same request creates one run.
 - Same evidence creates one observation.
-- Same detector result creates one finding.
+- Same detector result creates one finding per run `(run_id, fingerprint)`. A later run may persist the same fingerprint.
 - Event sequence cannot fork.
 
 ### AWS adapter contract
@@ -452,7 +479,7 @@ Required metrics:
 - Cross-account/region/resource response fixture.
 - Pagination fixture.
 - Throttling and retry fixture.
-- No state-changing command import.
+- Exact approved-command allowlist; `EnableAlarmActionsCommand` and other mutators are rejected.
 
 ### End to end
 
@@ -461,7 +488,7 @@ Required metrics:
 - Kill the worker mid-run, restart it, and receive one terminal run with no duplicates.
 - Cancel during collection and prove no later step commits.
 - Request an unapproved service and prove zero AWS calls occurred.
-- Fail one required collector and show UNKNOWN, never healthy.
+- Fail one required collector and show UNKNOWN, terminal `findings`, never `healthy` and never stuck in `evaluating`.
 
 ## 17. Build sequence
 
@@ -569,7 +596,7 @@ These are release blockers, not guidance.
 17. Future GitHub writes use a transactional outbox and reconciliation.
 18. One proposal creates at most one draft pull request.
 19. Lease fencing protects every durable step commit.
-20. Repeated finding fingerprints deduplicate into one case.
+20. Finding uniqueness is `(run_id, fingerprint)`. Repeated fingerprints across runs deduplicate into one case when that workflow is authorised.
 21. Learned knowledge requires human approval, versioning, provenance and expiry.
 22. Every run records cost, duration, provenance and evidence.
 

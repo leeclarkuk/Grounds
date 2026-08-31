@@ -18,6 +18,8 @@ The build-ready plan requires immutable, time-bounded, content-addressed observa
 6. Inaccessible, partial, throttled-out or schema-invalid collector results persist as a normalised failure observation (`inaccessible: true` or equivalent kind) so every finding, including `UNKNOWN` and `PASS`, can cite at least one observation id.
 7. Contradiction is detector-specific and yields `UNKNOWN`, never `PASS`. Examples: service target group does not match the inspected group; target-health response is for a different group; described running count disagrees with described running tasks.
 8. `profile_versions` are insert-only. A database trigger rejects `UPDATE` and `DELETE`. Detector versions are constants copied onto the run at enqueue, not chosen by the client.
+9. Observations, findings and events are append-only. Database triggers reject `UPDATE` and `DELETE`. Grants may change only by the single `consumed_at` null-to-timestamp transition; every other grant column is immutable.
+10. Finding citations are rows in `finding_citations`, not an unconstrained uuid array. Each citation foreign-keys the finding and the observation through `(id, run_id)` so a finding cannot cite a missing observation or an observation from another run.
 
 ## Consequences
 

@@ -26,6 +26,7 @@ Immutable run configuration.
 - `created_at` timestamptz not null default now()
 
 Unique `(organisation_id, profile_id, version)`.
+Unique `(id, organisation_id)` to support composite foreign keys.
 
 ### authorisation_grants
 
@@ -34,7 +35,7 @@ Exact, single-use, expiring grant.
 - `id` uuid primary key
 - `organisation_id` text not null
 - `actor_id` text not null
-- `profile_version_id` uuid not null references profile_versions(id)
+- `profile_version_id` uuid not null
 - `resource_scope` jsonb not null
 - `resource_scope_digest` text not null
 - `evidence_window_from` timestamptz not null
@@ -44,47 +45,64 @@ Exact, single-use, expiring grant.
 - `granted_at` timestamptz not null
 - `expires_at` timestamptz not null
 - `consumed_at` timestamptz null
-- `idempotency_key` text not null
+- `client_idempotency_key` text not null
 - `request_digest` text not null
 - `created_at` timestamptz not null default now()
 
-Unique `idempotency_key`. Unique `(idempotency_key, request_digest)` is enforced by storing both and rejecting digest mismatch in the application (409).
+Unique `client_idempotency_key`. Application returns 409 when the key exists with a different `request_digest`.
+Unique `(id, organisation_id)` and unique `(id, organisation_id, profile_version_id)`.
+Check `evidence_window_from < evidence_window_to`.
+Foreign key `(profile_version_id, organisation_id)` references `profile_versions (id, organisation_id)`.
+Trigger: the only permitted update is `consumed_at` from null to a timestamp. All other grant columns are immutable. Delete is rejected.
 
 ### assurance_runs
 
 - `id` uuid primary key
 - `organisation_id` text not null
-- `profile_version_id` uuid not null references profile_versions(id)
-- `authorisation_grant_id` uuid not null unique references authorisation_grants(id)
+- `profile_version_id` uuid not null
+- `authorisation_grant_id` uuid not null unique
 - `resource_scope` jsonb not null
 - `resource_scope_digest` text not null
 - `evidence_window_from` timestamptz not null
 - `evidence_window_to` timestamptz not null
 - `detector_versions` jsonb not null
-- `state` text not null
-- `result` text null
-- `idempotency_key` text not null unique
+- `state` text not null check (state in (
+    'pending_authorisation', 'queued', 'collecting', 'evaluating',
+    'healthy', 'findings', 'failed', 'cancelled'
+  ))
+- `result` text null check (result is null or result in ('PASS', 'FAIL', 'UNKNOWN'))
+- `client_idempotency_key` text not null unique
 - `request_digest` text not null
+- `run_identity_digest` text not null unique
 - `cancel_requested_at` timestamptz null
 - `created_at` timestamptz not null default now()
 - `updated_at` timestamptz not null default now()
 - `terminal_at` timestamptz null
+
+Check `evidence_window_from < evidence_window_to`.
+Unique `(id, organisation_id)` and unique `(id, profile_version_id)`.
+Foreign key `(profile_version_id, organisation_id)` references `profile_versions (id, organisation_id)`.
+Foreign key `(authorisation_grant_id, organisation_id, profile_version_id)` references `authorisation_grants (id, organisation_id, profile_version_id)`.
+Requires unique `(id, organisation_id, profile_version_id)` on `authorisation_grants`.
 
 ### run_steps
 
 - `id` uuid primary key
 - `run_id` uuid not null references assurance_runs(id)
 - `step_type` text not null check (step_type in ('collect', 'evaluate'))
-- `state` text not null
-- `attempt` integer not null default 0
+- `state` text not null check (state in ('blocked', 'ready', 'leased', 'succeeded', 'failed', 'cancelled'))
+- `attempt` integer not null default 0 check (attempt >= 0 and attempt <= 5)
+- `next_attempt_at` timestamptz null
 - `lease_owner` text null
 - `lease_expires_at` timestamptz null
-- `lease_epoch` bigint not null default 0
+- `lease_epoch` bigint not null default 0 check (lease_epoch >= 0)
 - `error_class` text null
 - `error_message` text null
 - `updated_at` timestamptz not null default now()
 
 Unique `(run_id, step_type)`.
+Check: if `state = 'leased'` then `lease_owner` is not null, `lease_expires_at` is not null and `lease_epoch >= 1`.
+Check: if `state in ('blocked', 'ready')` then `lease_owner` is null.
 
 ### observations
 
@@ -109,7 +127,8 @@ Unique `(run_id, step_type)`.
 - `content_identity` text not null
 - `created_at` timestamptz not null default now()
 
-Unique `(run_id, content_identity)`. No updates. No deletes.
+Unique `(run_id, content_identity)`. Unique `(id, run_id)`.
+Trigger rejects `UPDATE` and `DELETE`.
 
 ### findings
 
@@ -120,14 +139,27 @@ Unique `(run_id, content_identity)`. No updates. No deletes.
 - `profile_version_id` uuid not null
 - `resource` jsonb not null
 - `result` text not null check (result in ('PASS', 'FAIL', 'UNKNOWN'))
-- `severity` text not null
+- `severity` text not null check (severity in ('INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'))
 - `title` text not null
 - `explanation` text not null
-- `observation_ids` uuid[] not null check (cardinality(observation_ids) >= 1)
 - `fingerprint` text not null
 - `evaluated_at` timestamptz not null
 
-Unique `(run_id, fingerprint)`. No updates. No deletes.
+Unique `(run_id, fingerprint)`. Unique `(id, run_id)`.
+Foreign key `profile_version_id` references `profile_versions (id)`.
+Trigger rejects `UPDATE` and `DELETE`.
+At least one `finding_citations` row is required (deferrable constraint or insert-in-same-transaction check).
+
+### finding_citations
+
+- `finding_id` uuid not null
+- `observation_id` uuid not null
+- `run_id` uuid not null
+- primary key `(finding_id, observation_id)`
+- foreign key `(finding_id, run_id)` references `findings (id, run_id)`
+- foreign key `(observation_id, run_id)` references `observations (id, run_id)`
+
+A finding cannot cite a missing observation or an observation from another run.
 
 ### cases
 
@@ -148,11 +180,14 @@ Unique `(organisation_id, fingerprint)`.
 - `aggregate_id` uuid not null
 - `sequence` bigint not null
 - `type` text not null
+- `operation_id` text not null
 - `payload` jsonb not null
 - `actor_id` text null
 - `occurred_at` timestamptz not null default now()
 
-Unique `(aggregate_type, aggregate_id, sequence)`. Append-only.
+Unique `(aggregate_type, aggregate_id, sequence)`.
+Unique `(aggregate_type, aggregate_id, type, operation_id)`.
+Trigger rejects `UPDATE` and `DELETE`.
 
 ### outbox
 
@@ -167,4 +202,8 @@ Lag metric: count of rows where `processed_at` is null. Expected zero in Builds 
 
 ## Indexes for claim
 
-`run_steps (state, lease_expires_at)` plus `run_id` is sufficient for `FOR UPDATE SKIP LOCKED` claim. Claim SQL always joins `assurance_runs` to enforce eligible run state and absence of collect-cancel.
+`run_steps (state, lease_expires_at, next_attempt_at, attempt)` plus `run_id`. Claim SQL always joins `assurance_runs` to enforce eligible run state and absence of collect-cancel, and includes `attempt < 5` and due `next_attempt_at`.
+
+## Payload digest
+
+`payload_digest` is SHA-256 of the full redacted canonical payload before any truncation envelope is substituted. The persisted JSON may be the envelope. Detectors that require that payload therefore see `truncated = true` and return `UNKNOWN`.

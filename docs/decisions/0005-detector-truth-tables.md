@@ -47,12 +47,14 @@ The finding may say the health-check contract is failing. It must not claim a mi
 
 Alarm inventory is complete only when `DescribeAlarms` pagination finishes without error, truncation or dropped pages.
 
-A covering alarm is enabled (`ActionsEnabled = true`) and has at least one notification action (an SNS ARN in `AlarmActions`) and matches one of:
+A covering alarm is enabled (`ActionsEnabled = true`), has at least one configured notification action (a non-empty ARN in `AlarmActions`), and matches one of:
 
 - `AWS/ApplicationELB` / `UnHealthyHostCount` with a TargetGroup dimension matching the inspected target group; or
 - `AWS/ECS` / `RunningTaskCount` with a ServiceName dimension matching the inspected service.
 
 CPU utilisation is not coverage.
+
+The detector asserts configured alarm actions, not owner notification. `DescribeAlarms` cannot prove SNS subscriptions or that a human receives the alarm. Builds 0 and 1 do not call SNS. Title and explanation must not say an owner is notified.
 
 FAIL when inventory is complete and no covering alarm exists.
 
@@ -62,7 +64,34 @@ UNKNOWN if alarm inventory cannot be read completely.
 
 ### Evaluation outcome
 
-Every finding, including PASS, cites at least one observation id. Replay of the same observations and detector versions yields the same fingerprints.
+Every finding, including PASS, cites at least one observation through `finding_citations`. Replay of the same observations and detector versions yields the same fingerprints.
+
+### Finding fingerprint
+
+`fingerprint` is SHA-256 over RFC 8785 canonical JSON of:
+
+```ts
+{
+  organisationId: string,
+  detectorId: string,
+  detectorVersion: string,
+  detectorParametersDigest: string,
+  resource: ResourceRef,
+  result: "PASS" | "FAIL" | "UNKNOWN",
+  condition: Record<string, string | boolean | null>
+}
+```
+
+`detectorParametersDigest` is SHA-256 of the pinned profile detector parameters.
+
+Explicitly excluded: `run_id`, observation row ids, `evaluatedAt`, `title`, `explanation`, volatile counts, lease metadata.
+
+Detector-specific `condition` maps:
+
+- `GRD-ECS-001`: `{ targetGroupArn, healthCheckPath, matcher, failClause }` where `failClause` is `"replacement"`, `"deficit"`, `"both"`, or `null` on PASS/UNKNOWN.
+- `GRD-OBS-001`: `{ unhealthyTargetAlarm, runningTaskAlarm }` booleans for whether each coverage rule was met.
+
+Equivalent findings across runs share a fingerprint so a later case table can deduplicate. Distinct resources, detector versions, parameters or results must not collide.
 
 ## Consequences
 
@@ -71,7 +100,9 @@ Every finding, including PASS, cites at least one observation id. Replay of the 
 
 ## Tests required
 
-- Full truth tables for both detectors, including mixed PASS/UNKNOWN (run terminates `findings`).
+- Full truth tables for both detectors, including mixed PASS/UNKNOWN and UNKNOWN-only (run terminates `findings`, never stuck in `evaluating`).
 - CPU-only alarm does not satisfy GRD-OBS-001.
+- An alarm with `AlarmActions` still produces wording that claims configured actions, not owner delivery.
 - Incomplete alarm pagination yields UNKNOWN, never PASS or FAIL.
-- Fingerprint stability across replay.
+- Fingerprint stability across replay; equivalent findings across runs share a fingerprint; changing resource, detector version, parameters or result changes the fingerprint; distinct conditions do not collide.
+- Two runs with the same fingerprint both persist a finding row. Uniqueness is `(run_id, fingerprint)`.

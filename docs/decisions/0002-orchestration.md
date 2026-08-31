@@ -29,11 +29,14 @@ Result summary: `FAIL` if any `FAIL`, else `UNKNOWN` if any `UNKNOWN`, else `PAS
 
 Exactly two steps per run: `collect` then `evaluate`.
 
-- On enqueue: insert `collect` as `ready` and `evaluate` as `blocked`.
+- On enqueue: insert `collect` as `ready` and `evaluate` as `blocked`, both with `attempt = 0`, `lease_epoch = 0`, `next_attempt_at` null.
 - `evaluate` becomes `ready` only when `collect` reaches `succeeded`.
-- Step states: `blocked` → `ready` → `leased` → `succeeded` | `failed` | `cancelled`.
-- Retry: same step row, `leased` → `ready` on lease expiry recovery or retryable failure, `attempt` incremented, new attempt event. Pinned max attempts: 5. Backoff: 1s, 2s, 4s, 8s, 16s, capped at 16s.
-- Claim predicate: `FOR UPDATE SKIP LOCKED` where the step is `ready`, or `leased` with `lease_expires_at < now()`, the run state is eligible, and the run is not `cancelled`.
+- Step states: `blocked` → `ready` → `leased` → `succeeded` | `failed` | `cancelled`. `leased` → `ready` is only for an explicit retryable failure while the current owner still holds the lease.
+- `attempt` is the number of leases acquired for the step, including recoveries. The first claim sets `attempt = 1`. Maximum attempts: 5. There is no sixth lease.
+- Authoritative expired-lease transition: an expired `leased` row is claimed in place. The same `UPDATE` increments `lease_epoch`, sets the new owner and `lease_expires_at`, increments `attempt`, keeps `state = leased`, and records a recovery event. Recovery does not pass through `ready`.
+- Explicit retryable failure (still holding a valid lease): `leased` → `ready`, `next_attempt_at = now() + backoff(attempt)`, owner cleared, expiry cleared. Backoff: 1s, 2s, 4s, 8s, then 16s capped.
+- When a claim or watchdog sees `attempt >= 5` and the step is `ready` with due `next_attempt_at`, or `leased` and expired, the same transaction sets the step to `failed` and the run to `failed` (orchestration fault: attempts exhausted). No further lease is issued.
+- Claim predicate: `FOR UPDATE SKIP LOCKED` where `attempt < 5`, `(next_attempt_at IS NULL OR next_attempt_at <= now())`, run state is eligible, run is not `cancelled`, and either `state = ready` or (`state = leased` and `lease_expires_at < now()`).
 - Eligible run states: `collect` may be claimed in `queued` or `collecting`. `evaluate` may be claimed only in `evaluating`.
 
 ### Fencing
@@ -66,13 +69,14 @@ Cancellation is checked between bounded operations (between collector calls, aft
 
 ### Idempotency
 
-One protocol for every write:
+Two distinct keys. Do not store one and pretend it is the other.
 
-- Client supplies `Idempotency-Key`.
-- Same key and same payload digest: replay the original resource and HTTP result.
-- Same key and different payload digest: RFC 9457 `409`.
-- Run natural uniqueness additionally includes consumed `authorisation_grant_id` (unique) and a computed key of organisation, profile version, resource scope, evidence window and trigger identity.
-- Events are appended in the same transaction as the state change. Sequence is `MAX(sequence)+1` for that aggregate, protected by unique `(aggregate_type, aggregate_id, sequence)`.
+1. **Client request key.** Header `Idempotency-Key` on every write. Stored as `client_idempotency_key` plus `request_digest`. Same key and same digest: replay the original resource. Same key and different digest: RFC 9457 `409`. Unique per resource table (`authorisation_grants.client_idempotency_key`, `assurance_runs.client_idempotency_key`).
+2. **Run identity digest.** SHA-256 of RFC 8785 canonical JSON of `organisationId`, `profileVersionId`, `resourceScope`, `evidenceWindow`, and `triggerIdentity`. For manual Builds 0 and 1, `triggerIdentity` is `{ "type": "manual_grant", "grantId": "<uuid>" }`. Unique on `assurance_runs.run_identity_digest`.
+
+Enqueue is one transaction: consume grant, insert run, insert both steps, append the initial events (`grant_consumed`, `run_queued`, `step_created:collect`, `step_created:evaluate`). If any insert fails, the grant remains unconsumed.
+
+Events are appended in the same transaction as the state change. Sequence is `MAX(sequence)+1` under unique `(aggregate_type, aggregate_id, sequence)`. Duplicate logical events are also prevented by unique `(aggregate_type, aggregate_id, type, operation_id)`. `operation_id` is the command identity, for example `enqueue:<run_id>` or `collect:<lease_epoch>`. Replay of the same command inserts no second sequence number.
 
 ### Outbox and cases
 
@@ -91,6 +95,7 @@ One protocol for every write:
 - Crash after observation insert and before step completion replays without duplicates.
 - Evaluate cannot be claimed while collect is `ready` or `leased`.
 - Cancel during collect: collect lease cannot commit afterwards.
-- Retry increments attempt on the same step id.
-- Event sequence cannot fork.
-- Same idempotency key and payload replays; same key and different payload conflicts.
+- Retry increments attempt on the same step id. Durable `next_attempt_at` survives worker death. Two workers cannot recover the same epoch. A sixth attempt is impossible.
+- Crash between grant consume and run insert rolls back; the grant can still be consumed once.
+- Event sequence cannot fork. Replaying the same `operation_id` does not append a second event.
+- Client idempotency key replay and conflict behaviour as above. Distinct `run_identity_digest` uniqueness is also enforced.

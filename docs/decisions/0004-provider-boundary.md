@@ -6,7 +6,7 @@ Milestone: Build 0 (fakes and deferred ports), Build 1 (AWS adapter)
 
 ## Context
 
-The plan lists eleven ports and a denylist of mutator command name families. The architecture gate treated unused TypeScript ports and a fake outbox reconciler as speculative, and rejected a denylist that can miss aliases, dynamic imports and `ExecuteCommand`. `AssumeRoleCommand` is required for the worker and was not on the published collect allowlist.
+The plan listed eleven ports and a denylist of mutator command name families. A denylist does not enforce the no-mutator boundary: `EnableAlarmActionsCommand` and `DisableAlarmActionsCommand` match none of create, put, update, delete, register, deregister, run, start, stop, terminate, modify, set or tag. The architecture gate also treated unused TypeScript ports and a fake outbox reconciler as speculative. `AssumeRoleCommand` is required for the worker and is not a collector.
 
 ## Decision
 
