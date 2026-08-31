@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { EnqueueRun } from '@grounds/application';
-import { createFixturePorts } from '@grounds/adapter-aws';
+import { CancelRun, EnqueueRun } from '@grounds/application';
+import type { CollectContext } from '@grounds/application';
+import { createFixturePorts, createLivePorts } from '@grounds/adapter-aws';
 import { GrdEcs001, GrdObs001 } from '@grounds/detectors-ecs';
 import { CW_RUNNING_TASK_METRIC_KIND, OutOfScopeError } from '@grounds/domain';
 import { PAYMENTS_SERVICE, seedEcsProfileAndGrant } from '@grounds/test-support';
@@ -166,5 +167,67 @@ describe('Build 1 fixture end to end', () => {
       }),
     ).rejects.toThrow(/outside the authorised resource scope/);
     expect(ports.calls()).toEqual([]);
+  });
+
+  it('returns UNKNOWN, never failed, when AssumeRole is denied', async () => {
+    const seeded = await db.store.withTransaction((tx) => seedEcsProfileAndGrant(tx));
+    const run = await new EnqueueRun(db.store).execute({
+      grantId: seeded.grant.id,
+      clientIdempotencyKey: randomUUID(),
+      requestDigest: randomUUID(),
+    });
+    const ports = createLivePorts(
+      {
+        roleArn: 'arn:aws:iam::123456789012:role/grounds',
+        externalId: 'ext',
+        region: 'eu-west-2',
+        allowedScope: PAYMENTS_SERVICE,
+      },
+      () => Promise.reject(new Error('denied')),
+    );
+    const worker = new WorkerLoop({
+      store: db.store,
+      inventory: ports.inventory,
+      telemetry: ports.telemetry,
+      workerId: `assume-${randomUUID()}`,
+      leaseTtlSeconds: 15,
+      detectors: [new GrdEcs001(), new GrdObs001()],
+    });
+    await worker.runUntilIdle();
+    const terminal = await db.store.getRun(run.id);
+    expect(terminal?.state).toBe('findings');
+    expect(terminal?.result).toBe('UNKNOWN');
+    expect(terminal?.state).not.toBe('failed');
+    expect(terminal?.state).not.toBe('healthy');
+  });
+
+  it('cancels during collection and does not commit later observations', async () => {
+    const seeded = await db.store.withTransaction((tx) => seedEcsProfileAndGrant(tx));
+    const run = await new EnqueueRun(db.store).execute({
+      grantId: seeded.grant.id,
+      clientIdempotencyKey: randomUUID(),
+      requestDigest: randomUUID(),
+    });
+    const inventory = {
+      collect: async (context: CollectContext) => {
+        await context.onPage();
+        await new CancelRun(db.store).execute(run.id);
+        await context.onPage();
+        return [];
+      },
+    };
+    const worker = new WorkerLoop({
+      store: db.store,
+      inventory,
+      telemetry: { collect: async () => [] },
+      workerId: `cancel-${randomUUID()}`,
+      leaseTtlSeconds: 15,
+      detectors: [new GrdEcs001(), new GrdObs001()],
+    });
+    await worker.runOnce();
+    const terminal = await db.store.getRun(run.id);
+    const observations = await db.store.listObservations(run.id);
+    expect(terminal?.state).toBe('cancelled');
+    expect(observations).toHaveLength(0);
   });
 });

@@ -6,12 +6,16 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   CancelRun,
   EnqueueRun,
+  FindingReplayMismatchError,
   GrantNotConsumableError,
   HeartbeatLease,
   IdempotencyConflictError,
   RetryClaimedStep,
 } from '@grounds/application';
 import {
+  CW_RUNNING_TASK_METRIC_KIND,
+  ECS_SERVICE_KIND,
+  ECS_TASKS_KIND,
   ERROR_CLASSES,
   ERROR_MESSAGES,
   FAKE_INVENTORY_KIND,
@@ -714,5 +718,100 @@ describe('Build 0 control plane', () => {
     await app.close();
     await migrateUp(db.pool);
     expect(await isSchemaReady(db.pool)).toBe(true);
+  });
+
+  it('computes freshness at persist against PostgreSQL now', async () => {
+    const seeded = await enqueueRun();
+    const inventory = await db.store.withTransaction(async (tx) =>
+      tx.persistObservation(
+        seeded.run,
+        {
+          id: randomUUID(),
+          kind: ECS_SERVICE_KIND,
+          payload: { complete: true },
+          inaccessible: false,
+          operation: 'ecs.DescribeServices',
+          adapter: 'adapter-aws',
+          requestDigest: 'inventory',
+        },
+        3600,
+      ),
+    );
+    expect(inventory.observation.freshness).toBe('FRESH');
+    const zeroPolicy = await db.store.withTransaction(async (tx) =>
+      tx.persistObservation(
+        seeded.run,
+        {
+          id: randomUUID(),
+          kind: ECS_TASKS_KIND,
+          payload: { complete: true },
+          inaccessible: false,
+          operation: 'ecs.DescribeTasks',
+          adapter: 'adapter-aws',
+          requestDigest: 'tasks-zero',
+        },
+        0,
+      ),
+    );
+    expect(zeroPolicy.observation.freshness).toBe('STALE');
+    const missingMetric = await db.store.withTransaction(async (tx) =>
+      tx.persistObservation(
+        seeded.run,
+        {
+          id: randomUUID(),
+          kind: CW_RUNNING_TASK_METRIC_KIND,
+          payload: { datapoints: [], complete: true },
+          inaccessible: false,
+          operation: 'cloudwatch.GetMetricData',
+          adapter: 'adapter-aws',
+          requestDigest: 'metric-missing',
+        },
+        3600,
+      ),
+    );
+    expect(missingMetric.observation.freshness).toBe('STALE');
+    const staleMetric = await db.store.withTransaction(async (tx) =>
+      tx.persistObservation(
+        seeded.run,
+        {
+          id: randomUUID(),
+          kind: CW_RUNNING_TASK_METRIC_KIND,
+          payload: {
+            datapoints: [{ timestamp: '2020-01-01T00:00:00.000Z', value: 1 }],
+            complete: true,
+          },
+          inaccessible: false,
+          operation: 'cloudwatch.GetMetricData',
+          adapter: 'adapter-aws',
+          requestDigest: 'metric-old',
+          observedAt: '2020-01-01T00:00:00.000Z',
+        },
+        3600,
+      ),
+    );
+    expect(staleMetric.observation.freshness).toBe('STALE');
+  });
+
+  it('rejects conflicting fingerprint replay', async () => {
+    const result = await runToTerminal();
+    const finding = (await db.store.listFindings(result.run.id))[0];
+    if (!finding) {
+      throw new Error('expected finding');
+    }
+    await expect(
+      db.store.withTransaction((tx) =>
+        tx.persistFinding(result.run, {
+          id: randomUUID(),
+          detectorId: finding.detectorId,
+          detectorVersion: finding.detectorVersion,
+          result: finding.result,
+          severity: finding.severity,
+          title: finding.title,
+          explanation: `${finding.explanation} mutated`,
+          fingerprint: finding.fingerprint,
+          observationIds: finding.observationIds,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(FindingReplayMismatchError);
   });
 });

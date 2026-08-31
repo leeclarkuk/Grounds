@@ -243,6 +243,25 @@ describe('GRD-ECS-001', () => {
       }),
     );
     expect(detector.evaluate(input(none)).result).toBe('UNKNOWN');
+    const many = baseObservations();
+    const manyService = many.find((item) => item.kind === ECS_SERVICE_KIND);
+    if (!manyService) {
+      throw new Error('missing');
+    }
+    many.splice(
+      many.indexOf(manyService),
+      1,
+      obs(ECS_SERVICE_KIND, {
+        clusterName: 'payments-cluster',
+        serviceName: 'payments',
+        desiredCount: 2,
+        runningCount: 2,
+        runningTaskArns: ['arn:task/1', 'arn:task/2'],
+        targetGroupArns: [TG, `${TG}2`],
+        complete: true,
+      }),
+    );
+    expect(detector.evaluate(input(many)).result).toBe('UNKNOWN');
   });
 
   it('keeps fingerprints stable across equivalent observations', () => {
@@ -336,5 +355,48 @@ describe('GRD-OBS-001', () => {
     const withoutTasksAlarm = observations.filter((item) => item.kind !== CW_ALARMS_KIND);
     withoutTasksAlarm.push(obs(CW_ALARMS_KIND, { alarms: [], complete: true }));
     expect(detector.evaluate(input(withoutTasksAlarm)).result).toBe('UNKNOWN');
+  });
+
+  it('returns PASS for an empty target-group set when a covering RunningTaskCount alarm exists', () => {
+    const observations = baseObservations();
+    const service = observations.find((item) => item.kind === ECS_SERVICE_KIND);
+    if (!service) {
+      throw new Error('missing');
+    }
+    observations.splice(
+      observations.indexOf(service),
+      1,
+      obs(ECS_SERVICE_KIND, {
+        clusterName: 'payments-cluster',
+        serviceName: 'payments',
+        desiredCount: 2,
+        runningCount: 2,
+        runningTaskArns: ['arn:task/1', 'arn:task/2'],
+        targetGroupArns: [],
+        complete: true,
+      }),
+    );
+    const withoutHostAlarm = observations.filter((item) => item.kind !== CW_ALARMS_KIND);
+    withoutHostAlarm.push(
+      obs(CW_ALARMS_KIND, {
+        alarms: [
+          {
+            alarmName: 'tasks',
+            namespace: 'AWS/ECS',
+            metricName: 'RunningTaskCount',
+            dimensions: [
+              { name: 'ClusterName', value: 'payments-cluster' },
+              { name: 'ServiceName', value: 'payments' },
+            ],
+            actionsEnabled: true,
+            alarmActions: ['arn:aws:sns:eu-west-2:123456789012:ops'],
+          },
+        ],
+        complete: true,
+      }),
+    );
+    const finding = detector.evaluate(input(withoutHostAlarm));
+    expect(finding.result).toBe('PASS');
+    expect(finding.explanation).not.toMatch(/owner is notified/i);
   });
 });

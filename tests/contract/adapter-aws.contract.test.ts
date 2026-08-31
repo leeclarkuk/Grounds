@@ -87,6 +87,12 @@ describe('adapter-aws fixtures', () => {
     expect(requestDigest(base)).not.toBe(
       requestDigest({ ...base, query: { ...base.query, cursor: '1' } }),
     );
+    expect(requestDigest(base)).not.toBe(
+      requestDigest({
+        ...base,
+        query: { ...base.query, dimensions: { ClusterName: 'payments-cluster' } },
+      }),
+    );
   });
 
   it('makes zero provider calls for an unapproved service', async () => {

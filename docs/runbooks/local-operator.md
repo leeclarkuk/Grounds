@@ -28,9 +28,10 @@ export GROUNDS_FIXTURE_SCENARIO=healthy
 pnpm --filter @grounds/persistence-postgres exec node -e "import { createPool, migrateUp } from './dist/index.js'; const p=createPool(process.env.DATABASE_URL); await migrateUp(p); await p.end();"
 ```
 
-Use the demo script instead of assembling that by hand:
+Use the demo script instead of assembling that by hand. It migrates, seeds the immutable `ecs-payments` profile if missing, then starts the API, worker and Mission Control on loopback:
 
 ```bash
+pnpm build
 ./scripts/demo-fixtures.sh healthy
 ```
 

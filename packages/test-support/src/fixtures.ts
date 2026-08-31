@@ -85,20 +85,16 @@ export async function seedProfileAndGrant(
   return { profile, grant };
 }
 
-export async function seedEcsProfileAndGrant(
+export async function seedEcsProfile(
   tx: OrchestrationTx,
   options?: {
     readonly organisationId?: string;
     readonly resource?: ResourceRef;
-    readonly grantIdempotencyKey?: string;
   },
 ) {
   const organisationId = options?.organisationId ?? DEV_ORG;
   const resource = options?.resource ?? PAYMENTS_SERVICE;
   const profileId = randomUUID();
-  const now = new Date();
-  const windowFrom = new Date(now.getTime() - 3_600_000).toISOString();
-  const windowTo = now.toISOString();
   const detectorVersions = ecsDetectorVersions();
   const freshnessPolicy = { freshnessMaxAgeSeconds: 3600 };
   const detectorParameters = JSON.parse(
@@ -113,7 +109,7 @@ export async function seedEcsProfileAndGrant(
     freshnessPolicy,
     detectorParameters,
   });
-  const profile = await tx.insertProfile({
+  return tx.insertProfile({
     id: profileId,
     organisationId,
     profileId: 'ecs-payments',
@@ -124,6 +120,23 @@ export async function seedEcsProfileAndGrant(
     detectorParameters,
     contentDigest,
   });
+}
+
+export async function seedEcsProfileAndGrant(
+  tx: OrchestrationTx,
+  options?: {
+    readonly organisationId?: string;
+    readonly resource?: ResourceRef;
+    readonly grantIdempotencyKey?: string;
+  },
+) {
+  const organisationId = options?.organisationId ?? DEV_ORG;
+  const resource = options?.resource ?? PAYMENTS_SERVICE;
+  const now = new Date();
+  const windowFrom = new Date(now.getTime() - 3_600_000).toISOString();
+  const windowTo = now.toISOString();
+  const detectorVersions = ecsDetectorVersions();
+  const profile = await seedEcsProfile(tx, options);
   const grant = await tx.insertGrant({
     id: randomUUID(),
     organisationId,

@@ -35,7 +35,6 @@ export async function assumeRoleSession(input: {
   readonly roleArn: string;
   readonly externalId: string;
   readonly region: string;
-  readonly sessionSeconds?: number;
 }): Promise<AwsSessionCredentials> {
   if (!input.externalId) {
     throw new Error('external ID is required');
@@ -46,7 +45,7 @@ export async function assumeRoleSession(input: {
       RoleArn: input.roleArn,
       RoleSessionName: 'grounds-assurance',
       ExternalId: input.externalId,
-      DurationSeconds: input.sessionSeconds ?? AWS_SESSION_SECONDS,
+      DurationSeconds: AWS_SESSION_SECONDS,
     }),
   );
   const creds = response.Credentials;

@@ -76,26 +76,6 @@ export class CountingOperations implements AwsOperations {
   }
 }
 
-export class FixtureAwsAdapter implements ResourceInventoryPort, TelemetryPort {
-  public readonly operations: CountingOperations;
-
-  public constructor(scenario: FixtureScenarioName = 'healthy') {
-    this.operations = new CountingOperations(new FixtureOperations(loadFixtureScenario(scenario)));
-  }
-
-  public collect(context: CollectContext): Promise<readonly CollectorObservation[]> {
-    splitEcsResourceId(context.scope.resourceId);
-    if (isInventoryContext(context)) {
-      return collectInventory(this.operations, context);
-    }
-    return collectTelemetry(this.operations, context);
-  }
-}
-
-function isInventoryContext(_context: CollectContext): boolean {
-  return true;
-}
-
 export class DualFixtureAdapter implements ResourceInventoryPort, TelemetryPort {
   public readonly operations: CountingOperations;
   public constructor(
@@ -154,7 +134,6 @@ export type LiveAwsConfig = {
   readonly externalId: string;
   readonly region: string;
   readonly allowedScope: ResourceRef;
-  readonly sessionSeconds?: number;
 };
 
 export { AWS_SESSION_SECONDS, OutOfScopeError };

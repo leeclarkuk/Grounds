@@ -4,6 +4,7 @@ export {
   DEV_ORG,
   OTHER_ORG,
   PAYMENTS_SERVICE,
+  seedEcsProfile,
   seedEcsProfileAndGrant,
   seedProfileAndGrant,
 } from './fixtures.js';

@@ -5,19 +5,26 @@ import type {
   TelemetryPort,
 } from '@grounds/application';
 import {
-  AWS_SESSION_SECONDS,
   OutOfScopeError,
   splitEcsResourceId,
+  type JsonObject,
   type ResourceRef,
 } from '@grounds/domain';
 import { collectInventory, collectTelemetry } from './collectors.js';
-import { assumeRoleSession, LiveAwsOperations } from './live-operations.js';
+import {
+  assumeRoleSession,
+  LiveAwsOperations,
+  type AwsSessionCredentials,
+} from './live-operations.js';
 import type { LiveAwsConfig } from './adapter.js';
 import type { AwsOperations } from './operations.js';
 import { CountingOperations } from './adapter.js';
 import { assertApprovedScope, assertCallerAccount } from './scope.js';
 
 export type AssumeRoleFn = typeof assumeRoleSession;
+export type LiveOperationsFactory = (
+  session: AwsSessionCredentials,
+) => AwsOperations & { getCallerIdentity(): Promise<JsonObject> };
 
 export class LiveAwsBundle {
   public calls: string[] = [];
@@ -27,6 +34,8 @@ export class LiveAwsBundle {
   public constructor(
     private readonly config: LiveAwsConfig,
     private readonly bootstrap: AssumeRoleFn = assumeRoleSession,
+    private readonly createOperations: LiveOperationsFactory = (session) =>
+      new LiveAwsOperations(session),
   ) {}
 
   public async ensure(scope: ResourceRef): Promise<AwsOperations | undefined> {
@@ -46,10 +55,9 @@ export class LiveAwsBundle {
         roleArn: this.config.roleArn,
         externalId: this.config.externalId,
         region: this.config.region,
-        sessionSeconds: this.config.sessionSeconds ?? AWS_SESSION_SECONDS,
       });
       this.calls.push('assumeRole');
-      const live = new LiveAwsOperations(session);
+      const live = this.createOperations(session);
       const identity = await live.getCallerIdentity();
       this.calls.push('getCallerIdentity');
       const account = typeof identity['Account'] === 'string' ? identity['Account'] : '';
@@ -91,12 +99,17 @@ export class LiveTelemetry implements TelemetryPort {
 export function createLivePorts(
   config: LiveAwsConfig,
   bootstrap: AssumeRoleFn = assumeRoleSession,
+  createOperations?: LiveOperationsFactory,
 ): {
   readonly inventory: ResourceInventoryPort;
   readonly telemetry: TelemetryPort;
   readonly bundle: LiveAwsBundle;
 } {
-  const bundle = new LiveAwsBundle(config, bootstrap);
+  const bundle = new LiveAwsBundle(
+    config,
+    bootstrap,
+    createOperations ?? ((session) => new LiveAwsOperations(session)),
+  );
   return {
     inventory: new LiveInventory(bundle),
     telemetry: new LiveTelemetry(bundle),
