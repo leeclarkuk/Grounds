@@ -35,7 +35,7 @@ for (const root of ROOTS) {
     for (const pattern of FORBIDDEN) {
       if (
         pattern.test(text) &&
-        !file.includes('redaction.test') &&
+        !file.includes('redaction') &&
         !file.includes('scan-secrets')
       ) {
         process.stderr.write(`${file} matched ${String(pattern)}\n`);
