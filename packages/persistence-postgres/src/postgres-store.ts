@@ -1,6 +1,8 @@
 import {
   FenceLostError,
+  FindingReplayMismatchError,
   GrantNotConsumableError,
+  IdempotencyConflictError,
   UniqueConstraintError,
   type OrchestrationStore,
   type OrchestrationTx,
@@ -9,6 +11,7 @@ import {
   type EventInput,
   type FindingRecord,
   type Grant,
+  type HttpIdempotencyRecord,
   type ObservationRecord,
   type PersistFindingInput,
   type PersistObservationInput,
@@ -30,7 +33,6 @@ import {
   isStepState,
   parseEvidenceWindow,
   parseResourceRef,
-  requestDigest,
   type ErrorClass,
   type JsonObject,
   type StepType,
@@ -216,6 +218,17 @@ function mapObservation(row: QueryResultRow): ObservationRecord {
   };
 }
 
+function mapHttpIdempotency(row: QueryResultRow): HttpIdempotencyRecord {
+  return {
+    method: String(row['method']),
+    route: String(row['route']),
+    clientIdempotencyKey: String(row['client_idempotency_key']),
+    requestDigest: String(row['request_digest']),
+    responseStatus: Number(row['response_status']),
+    responseBody: assertJsonValue(row['response_body']),
+  };
+}
+
 export class PostgresOrchestrationStore implements OrchestrationStore {
   public constructor(private readonly pool: Pool) {}
 
@@ -245,6 +258,22 @@ export class PostgresOrchestrationStore implements OrchestrationStore {
       [clientIdempotencyKey],
     );
     return result.rows[0] ? mapRun(result.rows[0]) : undefined;
+  }
+
+  public async listRuns(organisationId: string): Promise<readonly AssuranceRun[]> {
+    const result = await this.pool.query(
+      `SELECT * FROM assurance_runs WHERE organisation_id = $1 ORDER BY created_at DESC`,
+      [organisationId],
+    );
+    return result.rows.map(mapRun);
+  }
+
+  public async listProfiles(organisationId: string): Promise<readonly ProfileVersion[]> {
+    const result = await this.pool.query(
+      `SELECT * FROM profile_versions WHERE organisation_id = $1 ORDER BY created_at DESC`,
+      [organisationId],
+    );
+    return result.rows.map(mapProfile);
   }
 
   public async listObservations(runId: string): Promise<readonly ObservationRecord[]> {
@@ -284,15 +313,25 @@ export class PostgresOrchestrationStore implements OrchestrationStore {
   }
 
   public async listEvents(aggregateType: string, aggregateId: string) {
-    const result = await this.pool.query<{ sequence: string; type: string; operation_id: string }>(
-      `SELECT sequence, type, operation_id FROM events WHERE aggregate_type = $1 AND aggregate_id = $2 ORDER BY sequence`,
+    const result = await this.pool.query(
+      `SELECT sequence, type, operation_id, occurred_at, payload FROM events WHERE aggregate_type = $1 AND aggregate_id = $2 ORDER BY sequence`,
       [aggregateType, aggregateId],
     );
     return result.rows.map((row) => ({
-      sequence: Number(row.sequence),
-      type: row.type,
-      operationId: row.operation_id,
+      sequence: Number(row['sequence']),
+      type: String(row['type']),
+      operationId: String(row['operation_id']),
+      occurredAt: requiredIso(row['occurred_at'] as Date),
+      payload: asJsonObject(row['payload']),
     }));
+  }
+
+  public async listSteps(runId: string) {
+    const result = await this.pool.query(
+      `SELECT * FROM run_steps WHERE run_id = $1 ORDER BY step_type`,
+      [runId],
+    );
+    return result.rows.map(mapStep);
   }
 
   public async getGrant(grantId: string): Promise<Grant | undefined> {
@@ -308,6 +347,21 @@ export class PostgresOrchestrationStore implements OrchestrationStore {
       [clientIdempotencyKey],
     );
     return result.rows[0] ? mapGrant(result.rows[0]) : undefined;
+  }
+
+  public async getHttpIdempotency(input: {
+    readonly organisationId: string;
+    readonly actorId: string;
+    readonly method: string;
+    readonly route: string;
+    readonly clientIdempotencyKey: string;
+  }): Promise<HttpIdempotencyRecord | undefined> {
+    const result = await this.pool.query(
+      `SELECT * FROM http_idempotency
+       WHERE organisation_id = $1 AND actor_id = $2 AND method = $3 AND route = $4 AND client_idempotency_key = $5`,
+      [input.organisationId, input.actorId, input.method, input.route, input.clientIdempotencyKey],
+    );
+    return result.rows[0] ? mapHttpIdempotency(result.rows[0]) : undefined;
   }
 
   public async getProfile(profileVersionId: string): Promise<ProfileVersion | undefined> {
@@ -334,6 +388,11 @@ export class PostgresOrchestrationStore implements OrchestrationStore {
 
   public async ping(): Promise<void> {
     await this.pool.query('SELECT 1');
+  }
+
+  public async now(): Promise<string> {
+    const result = await this.pool.query(`SELECT now() AS clock`);
+    return requiredIso(result.rows[0]?.['clock'] as Date);
   }
 }
 
@@ -493,7 +552,8 @@ class PostgresTx implements OrchestrationTx {
     const run = await this.lockRun(picked.run_id);
     const collect = await this.lockNamedStep(run.id, 'collect');
     const evaluate = await this.lockNamedStep(run.id, 'evaluate');
-    const step = this.claimableStep(run, collect, evaluate);
+    const clockMs = await this.readClockMs();
+    const step = this.claimableStep(run, collect, evaluate, clockMs);
     if (!step) {
       return undefined;
     }
@@ -615,7 +675,6 @@ class PostgresTx implements OrchestrationTx {
       payloadDigest: bounded.payloadDigest,
       redactionVersion: REDACTION_VERSION,
     });
-    const digest = requestDigest({ operation: input.operation, resource: run.resourceScope });
     const inserted = await this.client.query(
       `INSERT INTO observations (
          id, run_id, organisation_id, resource, kind, collected_at, window_from, window_to,
@@ -623,7 +682,13 @@ class PostgresTx implements OrchestrationTx {
          redaction_version, truncated, inaccessible, content_identity
        ) VALUES (
          $1,$2,$3,$4::jsonb,$5,now(),$6,$7,$8,$9,$10,
-         CASE WHEN $11::int <= 0 THEN 'STALE' ELSE 'FRESH' END,
+         CASE
+           WHEN $11::int <= 0 THEN 'STALE'
+           WHEN $5 = 'cloudwatch.metrics.running_task_count' AND $18::timestamptz IS NULL THEN 'STALE'
+           WHEN $18::timestamptz IS NULL THEN 'FRESH'
+           WHEN EXTRACT(EPOCH FROM (now() - $18::timestamptz)) >= $11 THEN 'STALE'
+           ELSE 'FRESH'
+         END,
          $12::jsonb,$13,$14,$15,$16,$17
        )
        ON CONFLICT (run_id, content_identity) DO NOTHING
@@ -638,7 +703,7 @@ class PostgresTx implements OrchestrationTx {
         run.evidenceWindow.to,
         input.adapter,
         input.operation,
-        digest,
+        input.requestDigest,
         freshnessMaxAgeSeconds,
         JSON.stringify(bounded.persisted),
         bounded.payloadDigest,
@@ -646,10 +711,27 @@ class PostgresTx implements OrchestrationTx {
         bounded.truncated,
         input.inaccessible || bounded.truncated,
         identity,
+        input.observedAt ?? null,
       ],
     );
     if (inserted.rows[0]) {
-      return { observation: mapObservation(inserted.rows[0]), duplicate: false };
+      const observation = mapObservation(inserted.rows[0]);
+      await this.appendEvent({
+        aggregateType: 'assurance_run',
+        aggregateId: run.id,
+        type: 'observation_persisted',
+        operationId: `observe:${run.id}:${identity}`,
+        payload: {
+          operation: input.operation,
+          requestDigest: input.requestDigest,
+          payloadDigest: bounded.payloadDigest,
+          contentIdentity: identity,
+          freshness: observation.freshness,
+          inaccessible: observation.inaccessible,
+        },
+        actorId: null,
+      });
+      return { observation, duplicate: false };
     }
     const existing = await this.client.query(
       `SELECT * FROM observations WHERE run_id = $1 AND content_identity = $2`,
@@ -695,6 +777,23 @@ class PostgresTx implements OrchestrationTx {
       if (!row) {
         throw new Error('finding conflict without existing row');
       }
+      const citations = await this.client.query(
+        `SELECT observation_id FROM finding_citations WHERE finding_id = $1 ORDER BY observation_id`,
+        [row['id']],
+      );
+      const persistedIds = citations.rows.map((item) => String(item['observation_id'])).sort();
+      const inboundIds = [...input.observationIds].sort();
+      if (
+        String(row['result']) !== input.result ||
+        String(row['detector_id']) !== input.detectorId ||
+        String(row['detector_version']) !== input.detectorVersion ||
+        String(row['title']) !== input.title ||
+        String(row['explanation']) !== input.explanation ||
+        Number(row['citation_count']) !== input.observationIds.length ||
+        persistedIds.join(',') !== inboundIds.join(',')
+      ) {
+        throw new FindingReplayMismatchError();
+      }
       return {
         finding: {
           id: String(row['id']),
@@ -709,7 +808,7 @@ class PostgresTx implements OrchestrationTx {
           explanation: String(row['explanation']),
           fingerprint: String(row['fingerprint']),
           citationCount: Number(row['citation_count']),
-          observationIds: input.observationIds,
+          observationIds: persistedIds,
         },
         duplicate: true,
       };
@@ -948,6 +1047,97 @@ class PostgresTx implements OrchestrationTx {
     return mapGrant(row);
   }
 
+  public async insertTimedGrant(
+    grant: Omit<Grant, 'grantedAt' | 'expiresAt' | 'consumedAt'>,
+  ): Promise<Grant> {
+    try {
+      const result = await this.client.query(
+        `INSERT INTO authorisation_grants (
+           id, organisation_id, actor_id, profile_version_id, resource_scope, resource_scope_digest,
+           evidence_window_from, evidence_window_to, detector_versions, action, granted_at, expires_at,
+           client_idempotency_key, request_digest
+         ) VALUES (
+           $1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,'assurance_run',now(), now() + interval '5 minutes',$10,$11
+         )
+         RETURNING *`,
+        [
+          grant.id,
+          grant.organisationId,
+          grant.actorId,
+          grant.profileVersionId,
+          JSON.stringify(grant.resourceScope),
+          grant.resourceScopeDigest,
+          grant.evidenceWindow.from,
+          grant.evidenceWindow.to,
+          JSON.stringify(grant.detectorVersions),
+          grant.clientIdempotencyKey,
+          grant.requestDigest,
+        ],
+      );
+      const row = result.rows[0];
+      if (!row) {
+        throw new Error('grant insert failed');
+      }
+      return mapGrant(row);
+    } catch (error) {
+      if (error instanceof DatabaseError && error.code === '23505') {
+        throw new UniqueConstraintError();
+      }
+      throw error;
+    }
+  }
+
+  public async putHttpIdempotency(input: {
+    readonly organisationId: string;
+    readonly actorId: string;
+    readonly record: HttpIdempotencyRecord;
+  }): Promise<void> {
+    try {
+      await this.client.query(
+        `INSERT INTO http_idempotency (
+           id, organisation_id, actor_id, method, route, client_idempotency_key, request_digest,
+           response_status, response_body
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
+        [
+          randomUUID(),
+          input.organisationId,
+          input.actorId,
+          input.record.method,
+          input.record.route,
+          input.record.clientIdempotencyKey,
+          input.record.requestDigest,
+          input.record.responseStatus,
+          JSON.stringify(input.record.responseBody),
+        ],
+      );
+    } catch (error) {
+      if (error instanceof DatabaseError && error.code === '23505') {
+        const existing = await this.client.query(
+          `SELECT request_digest FROM http_idempotency
+           WHERE organisation_id = $1 AND actor_id = $2 AND method = $3 AND route = $4 AND client_idempotency_key = $5`,
+          [
+            input.organisationId,
+            input.actorId,
+            input.record.method,
+            input.record.route,
+            input.record.clientIdempotencyKey,
+          ],
+        );
+        const digest = existing.rows[0] ? String(existing.rows[0]['request_digest']) : '';
+        if (digest === input.record.requestDigest) {
+          return;
+        }
+        throw new IdempotencyConflictError();
+      }
+      throw error;
+    }
+  }
+
+  public async now(): Promise<string> {
+    const result = await this.client.query(`SELECT now() AS clock`);
+    return requiredIso(result.rows[0]?.['clock'] as Date);
+  }
+
   private async lockNamedStep(runId: string, stepType: StepType): Promise<RunStep> {
     const result = await this.client.query(
       `SELECT * FROM run_steps WHERE run_id = $1 AND step_type = $2 FOR UPDATE`,
@@ -1002,27 +1192,33 @@ class PostgresTx implements OrchestrationTx {
     }
   }
 
+  private async readClockMs(): Promise<number> {
+    const result = await this.client.query(`SELECT now() AS clock`);
+    return new Date(result.rows[0]?.['clock'] as Date).getTime();
+  }
+
   private claimableStep(
     run: AssuranceRun,
     collect: RunStep,
     evaluate: RunStep,
+    clockMs: number,
   ): RunStep | undefined {
-    if (this.stepIsClaimable(run, collect)) {
+    if (this.stepIsClaimable(run, collect, clockMs)) {
       return collect;
     }
-    if (this.stepIsClaimable(run, evaluate)) {
+    if (this.stepIsClaimable(run, evaluate, clockMs)) {
       return evaluate;
     }
     return undefined;
   }
 
-  private stepIsClaimable(run: AssuranceRun, step: RunStep): boolean {
-    const due = step.nextAttemptAt === null || Date.parse(step.nextAttemptAt) <= Date.now();
+  private stepIsClaimable(run: AssuranceRun, step: RunStep, clockMs: number): boolean {
+    const due = step.nextAttemptAt === null || Date.parse(step.nextAttemptAt) <= clockMs;
     const available =
       step.state === 'ready' ||
       (step.state === 'leased' &&
         step.leaseExpiresAt !== null &&
-        Date.parse(step.leaseExpiresAt) < Date.now());
+        Date.parse(step.leaseExpiresAt) < clockMs);
     if (!due || !available) {
       return false;
     }

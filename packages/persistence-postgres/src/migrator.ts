@@ -5,6 +5,11 @@ import { fileURLToPath } from 'node:url';
 import type { Pool, PoolClient } from 'pg';
 
 export const EXPECTED_BUILD0_MIGRATIONS = ['0001_schema_migrations', '0002_build0_schema'] as const;
+export const EXPECTED_MIGRATIONS = [
+  '0001_schema_migrations',
+  '0002_build0_schema',
+  '0003_build1_constraints',
+] as const;
 
 export function resolveMigrationsDir(): string {
   const fromEnv = process.env['GROUNDS_MIGRATIONS_DIR'];
@@ -39,7 +44,7 @@ export async function appliedMigrationIds(client: Pool | PoolClient): Promise<st
 
 export async function isSchemaReady(client: Pool | PoolClient): Promise<boolean> {
   const applied = await appliedMigrationIds(client);
-  return EXPECTED_BUILD0_MIGRATIONS.every((id) => applied.includes(id));
+  return EXPECTED_MIGRATIONS.every((id) => applied.includes(id));
 }
 
 export async function migrateUp(pool: Pool, migrationsDir = resolveMigrationsDir()): Promise<void> {

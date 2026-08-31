@@ -16,6 +16,22 @@ export function parseEvidenceWindow(value: unknown): EvidenceWindow {
   return { from, to };
 }
 
+export function assertHistoricalEvidenceWindow(
+  window: EvidenceWindow,
+  nowIso: string,
+  maxDurationSeconds: number,
+): void {
+  const from = Date.parse(window.from);
+  const to = Date.parse(window.to);
+  const now = Date.parse(nowIso);
+  if (to > now) {
+    throw new Error('evidence window must not extend into the future');
+  }
+  if (to - from > maxDurationSeconds * 1000) {
+    throw new Error('evidence window is longer than one hour');
+  }
+}
+
 function asInstant(value: unknown, field: string): string {
   if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
     throw new Error(`${field} must be an RFC 3339 timestamp`);

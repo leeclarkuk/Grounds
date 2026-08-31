@@ -24,6 +24,23 @@ export default defineConfig({
           maxWorkers: 1,
         },
       },
+      {
+        test: {
+          name: 'contract',
+          include: ['tests/contract/**/*.contract.test.ts'],
+          testTimeout: 60_000,
+        },
+      },
+      {
+        test: {
+          name: 'e2e',
+          include: ['tests/e2e/**/*.e2e.test.ts'],
+          testTimeout: 180_000,
+          hookTimeout: 180_000,
+          fileParallelism: false,
+          maxWorkers: 1,
+        },
+      },
     ],
   },
 });

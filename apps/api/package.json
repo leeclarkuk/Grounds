@@ -17,6 +17,8 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@grounds/application": "workspace:*",
+    "@grounds/domain": "workspace:*",
     "@grounds/observability": "workspace:*",
     "@grounds/persistence-postgres": "workspace:*",
     "fastify": "5.12.1",

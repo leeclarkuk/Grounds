@@ -140,6 +140,8 @@ export type PersistObservationInput = {
   readonly inaccessible: boolean;
   readonly operation: string;
   readonly adapter: string;
+  readonly requestDigest: string;
+  readonly observedAt?: string;
 };
 
 export type PersistFindingInput = {

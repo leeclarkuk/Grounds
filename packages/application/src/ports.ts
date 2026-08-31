@@ -1,18 +1,28 @@
-import type { JsonValue, ResourceRef } from '@grounds/domain';
+import type { EvidenceWindow, JsonValue, ResourceRef } from '@grounds/domain';
 import type { AssuranceRun, ObservationRecord, PersistFindingInput } from './types.js';
 
-export type InventoryResult =
-  { readonly ok: true; readonly payload: JsonValue } | { readonly ok: false };
+export type CollectorObservation = {
+  readonly kind: string;
+  readonly payload: JsonValue;
+  readonly inaccessible: boolean;
+  readonly operation: string;
+  readonly adapter: string;
+  readonly requestDigest: string;
+  readonly observedAt?: string;
+};
 
-export type TelemetryResult =
-  { readonly ok: true; readonly payload: JsonValue } | { readonly ok: false };
+export type CollectContext = {
+  readonly scope: ResourceRef;
+  readonly window: EvidenceWindow;
+  readonly onPage: () => Promise<void>;
+};
 
 export interface ResourceInventoryPort {
-  describeInventory(scope: ResourceRef): Promise<InventoryResult>;
+  collect(context: CollectContext): Promise<readonly CollectorObservation[]>;
 }
 
 export interface TelemetryPort {
-  getTelemetry(scope: ResourceRef): Promise<TelemetryResult>;
+  collect(context: CollectContext): Promise<readonly CollectorObservation[]>;
 }
 
 export type DetectorInput = {
@@ -31,4 +41,5 @@ export interface Detector {
 
 export interface IdentityProvider {
   actorId(): string;
+  organisationId(): string;
 }

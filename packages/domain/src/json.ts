@@ -6,6 +6,10 @@ export function isJsonObject(value: JsonValue): value is JsonObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+export function isJsonArray(value: JsonValue | undefined): value is readonly JsonValue[] {
+  return Array.isArray(value);
+}
+
 export function assertJsonValue(value: unknown, path = '$'): JsonValue {
   if (value === null) {
     return null;

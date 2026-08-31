@@ -3,6 +3,7 @@ export type { Pool } from 'pg';
 export {
   appliedMigrationIds,
   EXPECTED_BUILD0_MIGRATIONS,
+  EXPECTED_MIGRATIONS,
   isSchemaReady,
   migrateDown,
   migrateUp,

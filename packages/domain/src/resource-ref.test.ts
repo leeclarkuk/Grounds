@@ -9,7 +9,7 @@ const inScope = {
   region: 'eu-west-2',
   service: 'ecs' as const,
   resourceType: 'service' as const,
-  resourceId: 'payments',
+  resourceId: 'payments-cluster/payments',
 };
 
 describe('resource scope', () => {
@@ -23,12 +23,14 @@ describe('resource scope', () => {
     expect(() => parseResourceRef({ ...inScope, region: 'us-east-1x' })).toThrow();
     expect(() => parseResourceRef({ ...inScope, service: 'lambda' })).toThrow();
     expect(() => parseResourceRef({ ...inScope, resourceId: 'pay*' })).toThrow();
+    expect(() => parseResourceRef({ ...inScope, resourceId: 'payments' })).toThrow();
+    expect(() => parseResourceRef({ ...inScope, resourceId: 'a/b/c' })).toThrow();
   });
 
   it('throws OutOfScopeError when the requested resource is not the grant', () => {
-    expect(() => assertInScope({ ...inScope, resourceId: 'other' }, inScope)).toThrow(
-      OutOfScopeError,
-    );
+    expect(() =>
+      assertInScope({ ...inScope, resourceId: 'payments-cluster/other' }, inScope),
+    ).toThrow(OutOfScopeError);
     expect(() => assertInScope({ ...inScope, accountId: '000000000000' }, inScope)).toThrow(
       OutOfScopeError,
     );

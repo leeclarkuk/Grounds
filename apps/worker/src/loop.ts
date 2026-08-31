@@ -4,10 +4,13 @@ import {
   EnqueueRun,
   EvaluateStep,
   FailClaimedStep,
+  FindingReplayMismatchError,
   HeartbeatLease,
+  InvariantViolationError,
   OutOfScopeError,
   RetryClaimedStep,
   isFenceLost,
+  type Detector,
   type OrchestrationStore,
   type ResourceInventoryPort,
   type TelemetryPort,
@@ -23,6 +26,7 @@ export type WorkerOptions = {
   readonly leaseTtlSeconds: number;
   readonly pollIntervalMs?: number;
   readonly crashAfterObservations?: boolean;
+  readonly detectors?: readonly Detector[];
 };
 
 export class WorkerLoop {
@@ -82,10 +86,10 @@ export class WorkerLoop {
           throw new CrashAfterObservationsError();
         }
       } else {
-        await new EvaluateStep(this.options.store, [new GrdFake001()]).execute(
-          claimed,
-          this.options.workerId,
-        );
+        await new EvaluateStep(
+          this.options.store,
+          this.options.detectors ?? [new GrdFake001()],
+        ).execute(claimed, this.options.workerId);
       }
       return true;
     } catch (error) {
@@ -96,7 +100,11 @@ export class WorkerLoop {
         log('warn', 'fence lost');
         return false;
       }
-      if (error instanceof OutOfScopeError) {
+      if (
+        error instanceof OutOfScopeError ||
+        error instanceof FindingReplayMismatchError ||
+        error instanceof InvariantViolationError
+      ) {
         await new FailClaimedStep(this.options.store).execute(
           claimed,
           this.options.workerId,

@@ -69,10 +69,14 @@ export function resourceScopeDigest(resource: ResourceRef): string {
 export function requestDigest(input: {
   readonly operation: string;
   readonly resource: ResourceRef;
+  readonly window?: EvidenceWindow;
+  readonly query?: JsonObject;
 }): string {
   return sha256Canonical({
     operation: input.operation,
     resource: resourceToJson(input.resource),
+    window: input.window ? windowToJson(input.window) : null,
+    query: input.query ?? {},
   });
 }
 

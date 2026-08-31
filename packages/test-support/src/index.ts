@@ -4,6 +4,7 @@ export {
   DEV_ORG,
   OTHER_ORG,
   PAYMENTS_SERVICE,
+  seedEcsProfileAndGrant,
   seedProfileAndGrant,
 } from './fixtures.js';
 export { GrdFake001 } from './grd-fake-001.js';

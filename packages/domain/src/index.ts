@@ -7,7 +7,11 @@ export {
   isErrorClass,
   type ErrorClass,
 } from './error-class.js';
-export { parseEvidenceWindow, type EvidenceWindow } from './evidence-window.js';
+export {
+  assertHistoricalEvidenceWindow,
+  parseEvidenceWindow,
+  type EvidenceWindow,
+} from './evidence-window.js';
 export { findingFingerprint, severityFor, SEVERITIES, type Severity } from './finding.js';
 export {
   assertInScope,
@@ -27,6 +31,7 @@ export {
 export {
   assertJsonValue,
   isJsonObject,
+  isJsonArray,
   type JsonObject,
   type JsonPrimitive,
   type JsonValue,
@@ -78,6 +83,28 @@ export {
   type StepType,
 } from './step-state.js';
 export {
+  ALARM_PAGE_BOUND,
+  AWS_ADAPTER,
+  AWS_SESSION_SECONDS,
+  CW_ALARMS_KIND,
+  CW_DESCRIBE_ALARMS,
+  CW_GET_METRIC_DATA,
+  CW_RUNNING_TASK_METRIC_KIND,
+  DEFAULT_ECS_DETECTOR_PARAMETERS,
+  ECS_DETECTOR_IDS,
+  ECS_DESCRIBE_SERVICES,
+  ECS_DESCRIBE_TASKS,
+  ECS_LIST_TASKS,
+  ECS_OBS_DETECTOR_ID,
+  ECS_OBS_DETECTOR_VERSION,
+  ECS_SERVICE_DETECTOR_ID,
+  ECS_SERVICE_DETECTOR_VERSION,
+  ECS_SERVICE_KIND,
+  ECS_TASKS_KIND,
+  ELB_DESCRIBE_TARGET_GROUPS,
+  ELB_DESCRIBE_TARGET_HEALTH,
+  ELB_TARGET_GROUP_KIND,
+  ELB_TARGET_HEALTH_KIND,
   FAKE_ADAPTER,
   FAKE_DETECTOR_ID,
   FAKE_DETECTOR_VERSION,
@@ -85,4 +112,25 @@ export {
   FAKE_INVENTORY_OPERATION,
   FAKE_TELEMETRY_KIND,
   FAKE_TELEMETRY_OPERATION,
+  GRANT_TTL_SECONDS,
+  MAX_EVIDENCE_WINDOW_SECONDS,
+  REQUIRED_INVENTORY_KINDS,
+  REQUIRED_TELEMETRY_KINDS,
+  STS_ASSUME_ROLE,
+  STS_GET_CALLER_IDENTITY,
 } from './constants.js';
+export {
+  assertDetectorPinSet,
+  ecsDetectorVersions,
+  fakeDetectorVersions,
+  isPinnedDetector,
+  type DetectorPinSet,
+  type DetectorVersions,
+} from './detector-pins.js';
+export { ecsResourceId, splitEcsResourceId, type EcsServiceIdentity } from './ecs.js';
+export {
+  inaccessiblePayload,
+  INACCESSIBLE_ERROR_CODES,
+  isInaccessibleErrorCode,
+  type InaccessibleErrorCode,
+} from './inaccessible.js';

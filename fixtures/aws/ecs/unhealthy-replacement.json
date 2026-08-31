@@ -1,0 +1,70 @@
+{
+  "describeServices": {
+    "services": [
+      {
+        "serviceArn": "arn:aws:ecs:eu-west-2:123456789012:service/payments-cluster/payments",
+        "serviceName": "payments",
+        "clusterArn": "arn:aws:ecs:eu-west-2:123456789012:cluster/payments-cluster",
+        "desiredCount": 2,
+        "runningCount": 1,
+        "loadBalancers": [
+          {
+            "targetGroupArn": "arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/pay/abc"
+          }
+        ]
+      }
+    ]
+  },
+  "listTasks": {
+    "taskArns": [
+      "arn:aws:ecs:eu-west-2:123456789012:task/payments-cluster/old-1",
+      "arn:aws:ecs:eu-west-2:123456789012:task/payments-cluster/old-2",
+      "arn:aws:ecs:eu-west-2:123456789012:task/payments-cluster/1"
+    ]
+  },
+  "describeTasks": {
+    "tasks": [
+      {
+        "taskArn": "arn:aws:ecs:eu-west-2:123456789012:task/payments-cluster/old-1",
+        "lastStatus": "STOPPED",
+        "desiredStatus": "STOPPED",
+        "stoppedAt": "2026-08-31T00:10:00.000Z"
+      },
+      {
+        "taskArn": "arn:aws:ecs:eu-west-2:123456789012:task/payments-cluster/old-2",
+        "lastStatus": "STOPPED",
+        "desiredStatus": "STOPPED",
+        "stoppedAt": "2026-08-31T00:20:00.000Z"
+      },
+      {
+        "taskArn": "arn:aws:ecs:eu-west-2:123456789012:task/payments-cluster/1",
+        "lastStatus": "RUNNING",
+        "desiredStatus": "RUNNING"
+      }
+    ]
+  },
+  "describeTargetGroups": {
+    "targetGroups": [
+      {
+        "targetGroupArn": "arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/pay/abc",
+        "healthCheckPath": "/health",
+        "matcher": { "HttpCode": "200" }
+      }
+    ]
+  },
+  "describeTargetHealth": {
+    "targetHealthDescriptions": [
+      {
+        "target": { "id": "i-1" },
+        "targetHealth": { "state": "unhealthy", "reason": "Target.FailedHealthChecks" }
+      }
+    ]
+  },
+  "describeAlarms": { "metricAlarms": [] },
+  "getMetricData": {
+    "metricDataResults": [
+      { "timestamps": ["2026-08-31T00:10:00.000Z", "2026-08-31T00:20:00.000Z"], "values": [0, 1] }
+    ]
+  },
+  "callerIdentity": { "Account": "123456789012" }
+}

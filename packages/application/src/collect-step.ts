@@ -1,17 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
 import {
-  FAKE_ADAPTER,
-  FAKE_INVENTORY_KIND,
-  FAKE_INVENTORY_OPERATION,
-  FAKE_TELEMETRY_KIND,
-  FAKE_TELEMETRY_OPERATION,
   OutOfScopeError,
+  assertDetectorPinSet,
   assertInScope,
-  redactUnknown,
+  sha256Canonical,
+  splitEcsResourceId,
 } from '@grounds/domain';
-import { FenceLostError } from './errors.js';
-import type { ResourceInventoryPort, TelemetryPort } from './ports.js';
+import { FenceLostError, InvariantViolationError } from './errors.js';
+import type { CollectorObservation, ResourceInventoryPort, TelemetryPort } from './ports.js';
 import type { OrchestrationStore } from './store.js';
 import type { ClaimedWork, PersistObservationInput } from './types.js';
 
@@ -28,30 +25,36 @@ export class CollectStep {
       throw new Error('collect step required');
     }
     const profile = await this.store.getProfile(claimed.run.profileVersionId);
-    if (!profile) {
-      throw new Error('profile version missing');
+    if (!profile || profile.organisationId !== claimed.run.organisationId) {
+      throw new InvariantViolationError('profile version missing or organisation mismatch');
     }
     await this.ensureStillLeased(claimed, workerId);
     assertInScope(claimed.run.resourceScope, profile.scope);
-    const inventory = await this.callInventory(claimed.run.resourceScope);
-    await this.persist(claimed, workerId, {
-      id: randomUUID(),
-      kind: FAKE_INVENTORY_KIND,
-      payload: inventory.payload,
-      inaccessible: !inventory.ok,
-      operation: FAKE_INVENTORY_OPERATION,
-      adapter: FAKE_ADAPTER,
-    });
+    assertDetectorPinSet(claimed.run.detectorVersions);
+    assertDetectorPinSet(profile.detectorVersions);
+    if (
+      sha256Canonical(claimed.run.detectorVersions) !== sha256Canonical(profile.detectorVersions)
+    ) {
+      throw new InvariantViolationError('run detector pins do not match the profile');
+    }
+    splitEcsResourceId(claimed.run.resourceScope.resourceId);
+    const onPage = async (): Promise<void> => {
+      await this.ensureStillLeased(claimed, workerId);
+    };
+    const context = {
+      scope: claimed.run.resourceScope,
+      window: claimed.run.evidenceWindow,
+      onPage,
+    };
+    const inventory = await this.safeCollect(() => this.inventory.collect(context));
+    for (const observation of inventory) {
+      await this.persist(claimed, workerId, toPersist(observation));
+    }
     await this.ensureStillLeased(claimed, workerId);
-    const telemetry = await this.callTelemetry(claimed.run.resourceScope);
-    await this.persist(claimed, workerId, {
-      id: randomUUID(),
-      kind: FAKE_TELEMETRY_KIND,
-      payload: telemetry.payload,
-      inaccessible: !telemetry.ok,
-      operation: FAKE_TELEMETRY_OPERATION,
-      adapter: FAKE_ADAPTER,
-    });
+    const telemetry = await this.safeCollect(() => this.telemetry.collect(context));
+    for (const observation of telemetry) {
+      await this.persist(claimed, workerId, toPersist(observation));
+    }
     if (this.skipComplete) {
       return;
     }
@@ -75,30 +78,16 @@ export class CollectStep {
     });
   }
 
-  private async callInventory(scope: Parameters<ResourceInventoryPort['describeInventory']>[0]) {
+  private async safeCollect(
+    collect: () => Promise<readonly CollectorObservation[]>,
+  ): Promise<readonly CollectorObservation[]> {
     try {
-      const result = await this.inventory.describeInventory(scope);
-      if (result.ok) {
-        return { ok: true as const, payload: redactUnknown(result.payload) };
-      }
-      return { ok: false as const, payload: { inaccessible: true, kind: FAKE_INVENTORY_KIND } };
+      return await collect();
     } catch (error) {
       if (error instanceof OutOfScopeError) {
         throw error;
       }
-      return { ok: false as const, payload: { inaccessible: true, kind: FAKE_INVENTORY_KIND } };
-    }
-  }
-
-  private async callTelemetry(scope: Parameters<TelemetryPort['getTelemetry']>[0]) {
-    try {
-      const result = await this.telemetry.getTelemetry(scope);
-      if (result.ok) {
-        return { ok: true as const, payload: redactUnknown(result.payload) };
-      }
-      return { ok: false as const, payload: { inaccessible: true, kind: FAKE_TELEMETRY_KIND } };
-    } catch {
-      return { ok: false as const, payload: { inaccessible: true, kind: FAKE_TELEMETRY_KIND } };
+      throw error;
     }
   }
 
@@ -109,7 +98,7 @@ export class CollectStep {
   ): Promise<void> {
     const profile = await this.store.getProfile(claimed.run.profileVersionId);
     if (!profile) {
-      throw new Error('profile version missing');
+      throw new InvariantViolationError('profile version missing');
     }
     await this.store.withTransaction(async (tx) => {
       const fence = await tx.requireFence({
@@ -135,6 +124,19 @@ export class CollectStep {
       });
     });
   }
+}
+
+function toPersist(observation: CollectorObservation): PersistObservationInput {
+  return {
+    id: randomUUID(),
+    kind: observation.kind,
+    payload: observation.payload,
+    inaccessible: observation.inaccessible,
+    operation: observation.operation,
+    adapter: observation.adapter,
+    requestDigest: observation.requestDigest,
+    ...(observation.observedAt === undefined ? {} : { observedAt: observation.observedAt }),
+  };
 }
 
 export function isFenceLost(error: unknown): boolean {

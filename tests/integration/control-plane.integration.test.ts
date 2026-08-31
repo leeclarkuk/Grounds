@@ -35,7 +35,7 @@ import { WorkerLoop } from '@grounds/worker';
 import { buildApi } from '../../apps/api/src/app.js';
 import { startTestDb, stopTestDb, resetDomainTables, type TestDb } from './harness.js';
 
-const OTHER_SERVICE = { ...PAYMENTS_SERVICE, resourceId: 'other' };
+const OTHER_SERVICE = { ...PAYMENTS_SERVICE, resourceId: 'payments-cluster/other' };
 
 describe('Build 0 control plane', () => {
   let db: TestDb;
@@ -91,6 +91,7 @@ describe('Build 0 control plane', () => {
     expect(await appliedMigrationIds(db.pool)).toEqual([
       '0001_schema_migrations',
       '0002_build0_schema',
+      '0003_build1_constraints',
     ]);
   });
 
@@ -280,6 +281,7 @@ describe('Build 0 control plane', () => {
             inaccessible: false,
             operation: 'fake.DescribeInventory',
             adapter: 'fixture',
+            requestDigest: 'req',
           },
           3600,
         );
@@ -582,8 +584,8 @@ describe('Build 0 control plane', () => {
     const seeded = await db.store.withTransaction((tx) =>
       seedProfileAndGrant(tx, { grantResource: OTHER_SERVICE }),
     );
-    expect(seeded.profile.scope.resourceId).toBe('payments');
-    expect(seeded.grant.resourceScope.resourceId).toBe('other');
+    expect(seeded.profile.scope.resourceId).toBe('payments-cluster/payments');
+    expect(seeded.grant.resourceScope.resourceId).toBe('payments-cluster/other');
     const run = await new EnqueueRun(db.store).execute({
       grantId: seeded.grant.id,
       clientIdempotencyKey: randomUUID(),
@@ -604,6 +606,25 @@ describe('Build 0 control plane', () => {
     expect(step?.state).toBe('failed');
     expect(step?.errorClass).toBe('invariant_violation');
     expect(step?.attempt).toBe(1);
+  });
+
+  it('claims work using PostgreSQL time even if Date.now is skewed', async () => {
+    const seeded = await enqueueRun();
+    const claimed = await db.store.withTransaction((tx) => tx.claimWork('clock-w', 15));
+    if (!claimed) {
+      throw new Error('expected claim');
+    }
+    await new RetryClaimedStep(db.store).execute(claimed, 'clock-w');
+    const originalNow = Date.now;
+    Date.now = () => originalNow() - 60_000;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, backoffSeconds(1) * 1000 + 200));
+      const next = await db.store.withTransaction((tx) => tx.claimWork('clock-retry', 15));
+      expect(next?.step.id).toBe(claimed.step.id);
+      expect(next?.run.id).toBe(seeded.run.id);
+    } finally {
+      Date.now = originalNow;
+    }
   });
 
   it('retries a claimed step on the same id and honours next_attempt_at', async () => {

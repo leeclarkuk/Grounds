@@ -1,3 +1,5 @@
+import { splitEcsResourceId } from './ecs.js';
+
 export const PROVIDER = 'aws' as const;
 export type Provider = typeof PROVIDER;
 
@@ -15,7 +17,6 @@ export type ResourceRef = {
 
 const ACCOUNT_ID = /^[0-9]{12}$/;
 const REGION = /^[a-z]{2}-[a-z]+-[0-9]+$/;
-const RESOURCE_ID = /^[A-Za-z0-9_./:-]+$/;
 
 export function parseResourceRef(value: unknown): ResourceRef {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -43,9 +44,7 @@ export function parseResourceRef(value: unknown): ResourceRef {
   if (resourceType !== RESOURCE_TYPE) {
     throw new Error('resourceType must be service');
   }
-  if (resourceId.length === 0 || resourceId.includes('*') || !RESOURCE_ID.test(resourceId)) {
-    throw new Error('resourceId is invalid');
-  }
+  splitEcsResourceId(resourceId);
   return { provider, accountId, region, service, resourceType, resourceId };
 }
 

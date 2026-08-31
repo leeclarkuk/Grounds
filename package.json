@@ -13,11 +13,17 @@
     "lint": "eslint .",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
-    "build": "tsc -b --pretty false",
-    "verify": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm test && pnpm test:integration && pnpm build"
+    "test:contract": "vitest run --project contract",
+    "test:e2e": "vitest run --project e2e",
+    "sbom": "node scripts/sbom.mjs",
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "scan:licenses": "node scripts/scan-licenses.mjs",
+    "build": "tsc -b --pretty false && pnpm --filter @grounds/web build",
+    "verify": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm test && pnpm test:integration && pnpm test:contract && pnpm test:e2e && pnpm sbom && pnpm scan:secrets && pnpm scan:licenses && pnpm build"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@grounds/adapter-aws": "workspace:*",
     "@grounds/api": "workspace:*",
     "@grounds/application": "workspace:*",
     "@grounds/domain": "workspace:*",

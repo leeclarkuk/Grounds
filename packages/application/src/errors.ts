@@ -32,3 +32,31 @@ export class UniqueConstraintError extends Error {
     super(message);
   }
 }
+
+export class NotFoundError extends Error {
+  public override readonly name = 'NotFoundError';
+  public constructor(message = 'resource not found') {
+    super(message);
+  }
+}
+
+export class ValidationError extends Error {
+  public override readonly name = 'ValidationError';
+  public constructor(message: string) {
+    super(message);
+  }
+}
+
+export class FindingReplayMismatchError extends Error {
+  public override readonly name = 'FindingReplayMismatchError';
+  public constructor(message = 'finding replay did not match the original row') {
+    super(message);
+  }
+}
+
+export class InvariantViolationError extends Error {
+  public override readonly name = 'InvariantViolationError';
+  public constructor(message = 'invariant violation') {
+    super(message);
+  }
+}

@@ -4,7 +4,17 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'apps/*/dist/**', 'packages/*/dist/**'],
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      'coverage/**',
+      'apps/*/dist/**',
+      'packages/*/dist/**',
+      'apps/web/.next/**',
+      'apps/web/**',
+      'scripts/**',
+      'apps/web/next-env.d.ts',
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.strictTypeChecked,

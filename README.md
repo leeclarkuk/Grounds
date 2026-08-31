@@ -7,10 +7,11 @@ The product rule is: no change without grounds.
 - Authorised scope and invariants: [AGENTS.md](AGENTS.md)
 - Build-ready plan: [Grounds-Build-Ready-Plan.md](Grounds-Build-Ready-Plan.md)
 - Binding amendments: [docs/decisions](docs/decisions/README.md)
+- Local operator runbook: [docs/runbooks/local-operator.md](docs/runbooks/local-operator.md)
 
-## Build 0
+## Build 1
 
-This repository currently implements the Build 0 control-plane skeleton: domain types, PostgreSQL schema, lease-fenced workers, fake providers, and API liveness/readiness. It does not collect from AWS, run the ECS detectors, or serve Mission Control.
+This repository implements Build 0 and Build 1: the durable control plane, a read-only AWS adapter, `GRD-ECS-001` and `GRD-OBS-001`, HTTP write routes, and the three Mission Control screens. It does not mutate AWS, open pull requests, or deploy.
 
 Disposable Postgres is started with Testcontainers by default. Set `GROUNDS_TEST_DATABASE_URL` to use an already-running server instead.
 
@@ -19,4 +20,4 @@ pnpm install --frozen-lockfile
 pnpm verify
 ```
 
-`pnpm verify` runs format, typecheck, lint, unit tests, PostgreSQL integration tests, and the TypeScript build. There is no contract or end-to-end suite in this milestone.
+`pnpm verify` runs format, typecheck, lint, unit, integration, contract, end-to-end fixture tests, SBOM, secret and licence scans, and the build. Live AWS is optional and out of CI.

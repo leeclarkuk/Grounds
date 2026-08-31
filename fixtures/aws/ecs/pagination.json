@@ -1,0 +1,83 @@
+{
+  "describeServices": {
+    "services": [
+      {
+        "serviceArn": "arn:aws:ecs:eu-west-2:123456789012:service/payments-cluster/payments",
+        "serviceName": "payments",
+        "clusterArn": "arn:aws:ecs:eu-west-2:123456789012:cluster/payments-cluster",
+        "desiredCount": 2,
+        "runningCount": 2,
+        "loadBalancers": [
+          {
+            "targetGroupArn": "arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/pay/abc"
+          }
+        ]
+      }
+    ]
+  },
+  "listTasks": { "taskArns": ["arn:aws:ecs:eu-west-2:123456789012:task/payments-cluster/1"] },
+  "describeTasks": {
+    "tasks": [
+      {
+        "taskArn": "arn:aws:ecs:eu-west-2:123456789012:task/payments-cluster/1",
+        "lastStatus": "RUNNING",
+        "desiredStatus": "RUNNING"
+      },
+      {
+        "taskArn": "arn:aws:ecs:eu-west-2:123456789012:task/payments-cluster/2",
+        "lastStatus": "RUNNING",
+        "desiredStatus": "RUNNING"
+      }
+    ]
+  },
+  "describeTargetGroups": {
+    "targetGroups": [
+      {
+        "targetGroupArn": "arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/pay/abc",
+        "healthCheckPath": "/health",
+        "matcher": { "HttpCode": "200" }
+      }
+    ]
+  },
+  "describeTargetHealth": {
+    "targetHealthDescriptions": [
+      { "target": { "id": "i-1" }, "targetHealth": { "state": "healthy", "reason": "" } }
+    ]
+  },
+  "describeAlarms": [
+    {
+      "metricAlarms": [
+        {
+          "alarmName": "page-1",
+          "namespace": "AWS/ECS",
+          "metricName": "CPUUtilization",
+          "dimensions": [],
+          "actionsEnabled": true,
+          "alarmActions": []
+        }
+      ],
+      "nextToken": "1"
+    },
+    {
+      "metricAlarms": [
+        {
+          "alarmName": "page-2",
+          "namespace": "AWS/ApplicationELB",
+          "metricName": "UnHealthyHostCount",
+          "dimensions": [
+            {
+              "name": "TargetGroup",
+              "value": "arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/pay/abc"
+            }
+          ],
+          "actionsEnabled": true,
+          "alarmActions": ["arn:aws:sns:eu-west-2:123456789012:ops"]
+        }
+      ]
+    }
+  ],
+  "getMetricData": {
+    "metricDataResults": [{ "timestamps": ["2026-08-31T00:10:00.000Z"], "values": [2] }]
+  },
+  "callerIdentity": { "Account": "123456789012" }
+}

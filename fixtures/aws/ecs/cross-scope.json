@@ -1,0 +1,21 @@
+{
+  "describeServices": {
+    "services": [
+      {
+        "serviceArn": "arn:aws:ecs:us-east-1:999999999999:service/other-cluster/other",
+        "serviceName": "other",
+        "clusterArn": "arn:aws:ecs:us-east-1:999999999999:cluster/other-cluster",
+        "desiredCount": 1,
+        "runningCount": 1,
+        "loadBalancers": []
+      }
+    ]
+  },
+  "listTasks": { "taskArns": [] },
+  "describeTasks": { "tasks": [] },
+  "describeTargetGroups": { "targetGroups": [] },
+  "describeTargetHealth": { "targetHealthDescriptions": [] },
+  "describeAlarms": { "metricAlarms": [] },
+  "getMetricData": { "metricDataResults": [] },
+  "callerIdentity": { "Account": "999999999999" }
+}

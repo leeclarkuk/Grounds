@@ -17,7 +17,9 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@grounds/adapter-aws": "workspace:*",
     "@grounds/application": "workspace:*",
+    "@grounds/detectors-ecs": "workspace:*",
     "@grounds/observability": "workspace:*",
     "@grounds/persistence-postgres": "workspace:*",
     "@grounds/test-support": "workspace:*",

@@ -45,7 +45,7 @@ export async function startTestDb(): Promise<TestDb> {
 export async function resetDomainTables(pool: Pool): Promise<void> {
   await pool.query(`
     TRUNCATE finding_citations, findings, observations, events, outbox, cases,
-             run_steps, assurance_runs, authorisation_grants, profile_versions
+             run_steps, assurance_runs, authorisation_grants, profile_versions, http_idempotency
     RESTART IDENTITY CASCADE
   `);
 }

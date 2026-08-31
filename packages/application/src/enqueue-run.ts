@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import {
-  FAKE_DETECTOR_ID,
-  FAKE_DETECTOR_VERSION,
+  assertDetectorPinSet,
   parseResourceRef,
   resourceScopeDigest,
   runIdentityDigest,
@@ -14,12 +13,18 @@ import {
   UniqueConstraintError,
 } from './errors.js';
 import type { OrchestrationStore } from './store.js';
-import type { AssuranceRun, Grant } from './types.js';
+import type { AssuranceRun } from './types.js';
 
 export type EnqueueCommand = {
   readonly grantId: string;
   readonly clientIdempotencyKey: string;
   readonly requestDigest: string;
+  readonly http?: {
+    readonly organisationId: string;
+    readonly actorId: string;
+    readonly method: string;
+    readonly route: string;
+  };
 };
 
 export class EnqueueRun {
@@ -31,23 +36,33 @@ export class EnqueueRun {
       if (existing.requestDigest !== command.requestDigest) {
         throw new IdempotencyConflictError();
       }
+      if (command.http) {
+        await this.store.withTransaction(async (tx) => {
+          await tx.putHttpIdempotency({
+            organisationId: command.http?.organisationId ?? existing.organisationId,
+            actorId: command.http?.actorId ?? '',
+            record: {
+              method: command.http?.method ?? 'POST',
+              route: command.http?.route ?? '/v1/runs',
+              clientIdempotencyKey: command.clientIdempotencyKey,
+              requestDigest: command.requestDigest,
+              responseStatus: 201,
+              responseBody: { id: existing.id },
+            },
+          });
+        });
+      }
       return existing;
     }
     try {
       return await this.store.withTransaction(async (tx) => {
-        let grant: Grant;
-        try {
-          grant = await tx.consumeGrant(command.grantId);
-        } catch (error) {
-          if (error instanceof GrantNotConsumableError) {
-            throw error;
-          }
-          throw error;
-        }
+        const grant = await tx.consumeGrant(command.grantId);
         const resourceScope = parseResourceRef(grant.resourceScope);
         const detectorVersions = grant.detectorVersions;
-        if (detectorVersions[FAKE_DETECTOR_ID] !== FAKE_DETECTOR_VERSION) {
-          throw new GrantNotConsumableError('grant is not pinned to GRD-FAKE-001');
+        try {
+          assertDetectorPinSet(detectorVersions);
+        } catch {
+          throw new GrantNotConsumableError('grant detector pin set is invalid');
         }
         const runId = randomUUID();
         const runIdentity = runIdentityDigest({
@@ -113,15 +128,31 @@ export class EnqueueRun {
           payload: { stepType: 'evaluate' },
           actorId: grant.actorId,
         });
+        if (command.http) {
+          await tx.putHttpIdempotency({
+            organisationId: command.http.organisationId,
+            actorId: command.http.actorId,
+            record: {
+              method: command.http.method,
+              route: command.http.route,
+              clientIdempotencyKey: command.clientIdempotencyKey,
+              requestDigest: command.requestDigest,
+              responseStatus: 201,
+              responseBody: { id: inserted.id },
+            },
+          });
+        }
         return inserted;
       });
     } catch (error) {
-      if (error instanceof UniqueConstraintError) {
+      if (error instanceof UniqueConstraintError || error instanceof GrantNotConsumableError) {
         const replay = await this.store.getRunByClientKey(command.clientIdempotencyKey);
         if (replay && replay.requestDigest === command.requestDigest) {
           return replay;
         }
-        throw new IdempotencyConflictError();
+        if (error instanceof UniqueConstraintError) {
+          throw new IdempotencyConflictError();
+        }
       }
       throw error;
     }

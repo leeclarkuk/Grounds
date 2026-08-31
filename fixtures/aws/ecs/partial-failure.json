@@ -1,0 +1,25 @@
+{
+  "describeServices": {
+    "services": [
+      {
+        "serviceArn": "arn:aws:ecs:eu-west-2:123456789012:service/payments-cluster/payments",
+        "serviceName": "payments",
+        "clusterArn": "arn:aws:ecs:eu-west-2:123456789012:cluster/payments-cluster",
+        "desiredCount": 2,
+        "runningCount": 2,
+        "loadBalancers": [
+          {
+            "targetGroupArn": "arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/pay/abc"
+          }
+        ]
+      }
+    ]
+  },
+  "listTasks": { "taskArns": ["arn:aws:ecs:eu-west-2:123456789012:task/payments-cluster/1"] },
+  "describeTasks": { "inaccessible": true, "errorCode": "unavailable" },
+  "describeTargetGroups": { "inaccessible": true, "errorCode": "unavailable" },
+  "describeTargetHealth": { "inaccessible": true, "errorCode": "unavailable" },
+  "describeAlarms": { "inaccessible": true, "errorCode": "unavailable" },
+  "getMetricData": { "inaccessible": true, "errorCode": "unavailable" },
+  "callerIdentity": { "Account": "123456789012" }
+}

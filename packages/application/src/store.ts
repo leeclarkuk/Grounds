@@ -21,21 +21,43 @@ export interface OrchestrationStore {
   withTransaction<T>(fn: (tx: OrchestrationTx) => Promise<T>): Promise<T>;
   getRun(runId: string): Promise<AssuranceRun | undefined>;
   getRunByClientKey(clientIdempotencyKey: string): Promise<AssuranceRun | undefined>;
+  listRuns(organisationId: string): Promise<readonly AssuranceRun[]>;
+  listProfiles(organisationId: string): Promise<readonly ProfileVersion[]>;
   listObservations(runId: string): Promise<readonly ObservationRecord[]>;
   listFindings(runId: string): Promise<readonly FindingRecord[]>;
   listEvents(aggregateType: string, aggregateId: string): Promise<readonly EventRow[]>;
+  listSteps(runId: string): Promise<readonly RunStep[]>;
   getGrant(grantId: string): Promise<Grant | undefined>;
   getGrantByClientKey(clientIdempotencyKey: string): Promise<Grant | undefined>;
+  getHttpIdempotency(input: {
+    readonly organisationId: string;
+    readonly actorId: string;
+    readonly method: string;
+    readonly route: string;
+    readonly clientIdempotencyKey: string;
+  }): Promise<HttpIdempotencyRecord | undefined>;
   getProfile(profileVersionId: string): Promise<ProfileVersion | undefined>;
   getStep(runId: string, stepType: 'collect' | 'evaluate'): Promise<RunStep | undefined>;
   outboxLag(): Promise<number>;
   ping(): Promise<void>;
+  now(): Promise<string>;
 }
 
 export type EventRow = {
   readonly sequence: number;
   readonly type: string;
   readonly operationId: string;
+  readonly occurredAt: string;
+  readonly payload: import('@grounds/domain').JsonObject;
+};
+
+export type HttpIdempotencyRecord = {
+  readonly method: string;
+  readonly route: string;
+  readonly clientIdempotencyKey: string;
+  readonly requestDigest: string;
+  readonly responseStatus: number;
+  readonly responseBody: import('@grounds/domain').JsonValue;
 };
 
 export interface OrchestrationTx {
@@ -98,4 +120,11 @@ export interface OrchestrationTx {
   incrementCollectorAttempts(runId: string): Promise<void>;
   insertProfile(profile: ProfileVersion): Promise<ProfileVersion>;
   insertGrant(grant: Grant): Promise<Grant>;
+  insertTimedGrant(grant: Omit<Grant, 'grantedAt' | 'expiresAt' | 'consumedAt'>): Promise<Grant>;
+  putHttpIdempotency(input: {
+    readonly organisationId: string;
+    readonly actorId: string;
+    readonly record: HttpIdempotencyRecord;
+  }): Promise<void>;
+  now(): Promise<string>;
 }
