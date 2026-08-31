@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { ALLOWED_AWS_COMMANDS } from '../../packages/adapter-aws/src/allowlist.js';
 
 const MUTATOR_FAMILIES =
-  /(Create|Put|Update|Delete|Register|Deregister|Run|Start|Stop|Terminate|Modify|Set|Tag)[A-Za-z0-9]*Command/;
+  /(Create|Put|Update|Delete|Register|Deregister|Run|Start|Stop|Terminate|Modify|Set|Tag)[A-Za-z0-9]*Command/g;
 
 function walk(dir: string): string[] {
   const out: string[] = [];
@@ -35,7 +35,7 @@ describe('AWS command allowlist', () => {
       expect(text).not.toMatch(/import\((\s|'|")@aws-sdk\//);
       for (const match of text.matchAll(/\b([A-Za-z][A-Za-z0-9]*Command)\b/g)) {
         const name = match[1];
-        if (name) {
+        if (name && name !== 'AllowedAwsCommand') {
           commands.add(name);
         }
       }

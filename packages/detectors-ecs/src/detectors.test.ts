@@ -196,7 +196,8 @@ describe('GRD-ECS-001', () => {
   });
 
   it('returns UNKNOWN for missing, stale, truncated or contradictory evidence', () => {
-    expect(detector.evaluate(input([])).result).toBe('UNKNOWN');
+    const missingRequired = baseObservations().filter((item) => item.kind === CW_ALARMS_KIND);
+    expect(detector.evaluate(input(missingRequired)).result).toBe('UNKNOWN');
     const stale = baseObservations().map((item) =>
       item.kind === ECS_SERVICE_KIND ? { ...item, freshness: 'STALE' as const } : item,
     );
