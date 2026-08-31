@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { AWS_SESSION_SECONDS, type JsonObject } from '@grounds/domain';
+import { createLivePorts } from './live-adapter.js';
+import { assumeRoleSession } from './live-operations.js';
+import type { AwsOperations } from './operations.js';
+import { DEFAULT_ALLOWED_SCOPE } from './scope.js';
 
 const window = { from: '2026-08-31T00:00:00.000Z', to: '2026-08-31T01:00:00.000Z' };
 
