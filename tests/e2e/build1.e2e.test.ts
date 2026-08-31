@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CancelRun, EnqueueRun } from '@grounds/application';
@@ -229,5 +231,52 @@ describe('Build 1 fixture end to end', () => {
     const observations = await db.store.listObservations(run.id);
     expect(terminal?.state).toBe('cancelled');
     expect(observations).toHaveLength(0);
+  });
+
+  it('recovers from SIGKILL after observation insert without duplicates', async () => {
+    const seeded = await db.store.withTransaction((tx) => seedEcsProfileAndGrant(tx));
+    const run = await new EnqueueRun(db.store).execute({
+      grantId: seeded.grant.id,
+      clientIdempotencyKey: randomUUID(),
+      requestDigest: randomUUID(),
+    });
+    const child = spawn(process.execPath, [join(process.cwd(), 'scripts/crash-worker-child.mjs')], {
+      env: { ...process.env, DATABASE_URL: db.url, GROUNDS_WORKER_ID: 'crash-child' },
+      stdio: 'ignore',
+    });
+    try {
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        const observations = await db.store.listObservations(run.id);
+        if (observations.length > 0) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect((await db.store.listObservations(run.id)).length).toBeGreaterThan(0);
+      child.kill('SIGKILL');
+      await new Promise((resolve) => setTimeout(resolve, 1300));
+      const recovering = new WorkerLoop({
+        store: db.store,
+        inventory: createFixturePorts('healthy').inventory,
+        telemetry: createFixturePorts('healthy').telemetry,
+        workerId: 'recover-kill',
+        leaseTtlSeconds: 15,
+        detectors: [new GrdEcs001(), new GrdObs001()],
+      });
+      await recovering.runUntilIdle();
+      const terminal = await db.store.getRun(run.id);
+      const observations = await db.store.listObservations(run.id);
+      const findings = await db.store.listFindings(run.id);
+      const events = await db.store.listEvents('assurance_run', run.id);
+      expect(terminal?.state === 'healthy' || terminal?.state === 'findings').toBe(true);
+      const identities = observations.map((item) => item.contentIdentity).sort();
+      expect(identities).toEqual([...new Set(identities)].sort());
+      expect(findings).toHaveLength(2);
+      const operationIds = events.map((item) => item.operationId).sort();
+      expect(operationIds).toEqual([...new Set(operationIds)].sort());
+    } finally {
+      child.kill('SIGKILL');
+    }
   });
 });

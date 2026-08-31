@@ -814,4 +814,38 @@ describe('Build 0 control plane', () => {
       ),
     ).rejects.toBeInstanceOf(FindingReplayMismatchError);
   });
+
+  it('redacts secrets before observation persist and HTTP read', async () => {
+    const seeded = await enqueueRun();
+    const persisted = await db.store.withTransaction(async (tx) =>
+      tx.persistObservation(
+        seeded.run,
+        {
+          id: randomUUID(),
+          kind: FAKE_INVENTORY_KIND,
+          payload: {
+            accessKeyId: 'AKIA-NOT-A-REAL-KEY',
+            aws_secret_access_key: 'example-secret-value',
+            note: 'safe',
+          },
+          inaccessible: false,
+          operation: 'fake.DescribeInventory',
+          adapter: 'fixture',
+          requestDigest: 'redact-test',
+        },
+        3600,
+      ),
+    );
+    expect(JSON.stringify(persisted.observation.payload)).not.toMatch(/AKIA-NOT-A-REAL-KEY/);
+    expect(JSON.stringify(persisted.observation.payload)).not.toMatch(/example-secret-value/);
+    expect(JSON.stringify(persisted.observation.payload)).toMatch(/REDACTED/);
+    const { app } = await buildApi({
+      databaseUrl: db.url,
+      identityMode: 'development',
+    });
+    const detail = await app.inject({ method: 'GET', url: `/v1/runs/${seeded.run.id}` });
+    expect(detail.body).not.toMatch(/AKIA-NOT-A-REAL-KEY/);
+    expect(detail.body).not.toMatch(/example-secret-value/);
+    await app.close();
+  });
 });

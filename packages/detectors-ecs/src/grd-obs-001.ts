@@ -63,7 +63,7 @@ export class GrdObs001 implements Detector {
       );
 
     let result: DetectorOutput['result'] = 'FAIL';
-    if (!inventoryComplete) {
+    if (!inventoryComplete || requiredUnusable(serviceObs) || service === undefined) {
       result = 'UNKNOWN';
     } else if (ambiguousGroups) {
       result = runningTaskAlarm ? 'PASS' : 'UNKNOWN';

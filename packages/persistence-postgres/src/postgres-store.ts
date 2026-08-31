@@ -33,6 +33,7 @@ import {
   isStepState,
   parseEvidenceWindow,
   parseResourceRef,
+  redactJson,
   type ErrorClass,
   type JsonObject,
   type StepType,
@@ -673,7 +674,7 @@ class PostgresTx implements OrchestrationTx {
     input: PersistObservationInput,
     freshnessMaxAgeSeconds: number,
   ) {
-    const bounded = boundPayload(input.payload);
+    const bounded = boundPayload(redactJson(input.payload));
     const identity = contentIdentity({
       organisationId: run.organisationId,
       kind: input.kind,

@@ -163,4 +163,140 @@ describe('adapter-aws fixtures', () => {
     });
     expect(telemetry.every((item) => item.inaccessible)).toBe(true);
   });
+
+  it('normalises PascalCase AWS SDK members identically to camelCase', async () => {
+    const camelGroups = normaliseAlarms(
+      [
+        {
+          alarmName: 'tasks',
+          namespace: 'AWS/ECS',
+          metricName: 'RunningTaskCount',
+          dimensions: [
+            { name: 'ClusterName', value: 'payments-cluster' },
+            { name: 'ServiceName', value: 'payments' },
+          ],
+          actionsEnabled: true,
+          alarmActions: ['arn:aws:sns:eu-west-2:123456789012:ops'],
+        },
+      ],
+      true,
+    );
+    const pascalGroups = normaliseAlarms(
+      [
+        {
+          AlarmName: 'tasks',
+          Namespace: 'AWS/ECS',
+          MetricName: 'RunningTaskCount',
+          Dimensions: [
+            { Name: 'ClusterName', Value: 'payments-cluster' },
+            { Name: 'ServiceName', Value: 'payments' },
+          ],
+          ActionsEnabled: true,
+          AlarmActions: ['arn:aws:sns:eu-west-2:123456789012:ops'],
+        },
+      ],
+      true,
+    );
+    expect(pascalGroups).toEqual(camelGroups);
+    const operations: AwsOperations = {
+      describeServices: () =>
+        Promise.resolve({
+          Services: [
+            {
+              ServiceName: 'payments',
+              ServiceArn: 'arn:aws:ecs:eu-west-2:123456789012:service/payments-cluster/payments',
+              ClusterArn: 'arn:aws:ecs:eu-west-2:123456789012:cluster/payments-cluster',
+              DesiredCount: 2,
+              RunningCount: 2,
+              LoadBalancers: [
+                {
+                  TargetGroupArn:
+                    'arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/pay/abc',
+                },
+              ],
+            },
+          ],
+        }),
+      listTasks: () => Promise.resolve({ payload: { TaskArns: [] }, nextToken: null }),
+      describeTasks: () => Promise.resolve({ Tasks: [] }),
+      describeTargetGroups: () =>
+        Promise.resolve({
+          TargetGroups: [
+            {
+              TargetGroupArn:
+                'arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/pay/abc',
+              HealthCheckPath: '/health',
+              Matcher: { HttpCode: '200' },
+            },
+          ],
+        }),
+      describeTargetHealth: () =>
+        Promise.resolve({
+          payload: {
+            TargetHealthDescriptions: [
+              { Target: { Id: 'i-1' }, TargetHealth: { State: 'healthy', Reason: '' } },
+            ],
+          },
+          nextToken: null,
+        }),
+      describeAlarms: () =>
+        Promise.resolve({
+          payload: {
+            MetricAlarms: [
+              {
+                AlarmName: 'tasks',
+                Namespace: 'AWS/ECS',
+                MetricName: 'RunningTaskCount',
+                Dimensions: [
+                  { Name: 'ClusterName', Value: 'payments-cluster' },
+                  { Name: 'ServiceName', Value: 'payments' },
+                ],
+                ActionsEnabled: true,
+                AlarmActions: ['arn:aws:sns:eu-west-2:123456789012:ops'],
+              },
+            ],
+          },
+          nextToken: null,
+        }),
+      getMetricData: () =>
+        Promise.resolve({
+          payload: {
+            MetricDataResults: [
+              {
+                Timestamps: ['2026-08-31T00:10:00.000Z'],
+                Values: [2],
+              },
+            ],
+          },
+          nextToken: null,
+        }),
+    };
+    const inventory = await collectInventory(operations, {
+      scope: PAYMENTS_SERVICE,
+      window,
+      onPage: async () => undefined,
+    });
+    const telemetry = await collectTelemetry(operations, {
+      scope: PAYMENTS_SERVICE,
+      window,
+      onPage: async () => undefined,
+    });
+    const service = inventory.find((item) => item.kind === 'ecs.service');
+    const groups = inventory.find((item) => item.kind === 'elb.target_group');
+    const alarms = telemetry.find((item) => item.kind === 'cloudwatch.alarms');
+    const metrics = telemetry.find((item) => item.kind === 'cloudwatch.metrics.running_task_count');
+    expect(service?.payload).toMatchObject({
+      serviceName: 'payments',
+      targetGroupArns: ['arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/pay/abc'],
+    });
+    expect(groups?.payload).toMatchObject({
+      targetGroups: [{ healthCheckPath: '/health', matcher: '200' }],
+    });
+    expect(alarms?.payload).toMatchObject({
+      alarms: [{ alarmName: 'tasks', metricName: 'RunningTaskCount' }],
+    });
+    expect(metrics?.payload).toMatchObject({
+      datapoints: [{ timestamp: '2026-08-31T00:10:00.000Z', value: 2 }],
+    });
+  });
 });

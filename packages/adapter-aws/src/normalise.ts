@@ -8,25 +8,30 @@ import {
 } from '@grounds/domain';
 import { asObject } from './operations.js';
 import { clusterNameFromArn, objectList, stringList } from './scope.js';
+import { readNumber, readString, readValue } from './fields.js';
 
 export function inaccessible(errorCode: InaccessibleErrorCode): JsonObject {
   return inaccessiblePayload(errorCode);
 }
 
 export function normaliseService(service: JsonObject, clusterName: string): JsonObject {
-  const loadBalancers = objectList(service['loadBalancers']);
+  const loadBalancers = objectList(readValue(service, 'loadBalancers', 'LoadBalancers'));
   const targetGroupArns = loadBalancers
-    .map((item) => item['targetGroupArn'])
-    .filter((item): item is string => typeof item === 'string')
+    .map((item) => readString(item, 'targetGroupArn', 'TargetGroupArn'))
+    .filter((item) => item.length > 0)
     .sort();
-  const deployments = objectList(service['deployments']);
-  const primary = deployments.find((item) => item['status'] === 'PRIMARY') ?? {};
-  const runningTaskArns = stringList(primary['runningTaskArns'] ?? service['runningTaskArns']);
+  const deployments = objectList(readValue(service, 'deployments', 'Deployments'));
+  const primary =
+    deployments.find((item) => readString(item, 'status', 'Status') === 'PRIMARY') ?? {};
+  const runningTaskArns = stringList(
+    readValue(primary, 'runningTaskArns', 'RunningTaskArns') ??
+      readValue(service, 'runningTaskArns', 'RunningTaskArns'),
+  );
   return {
     clusterName,
-    serviceName: typeof service['serviceName'] === 'string' ? service['serviceName'] : '',
-    desiredCount: typeof service['desiredCount'] === 'number' ? service['desiredCount'] : 0,
-    runningCount: typeof service['runningCount'] === 'number' ? service['runningCount'] : 0,
+    serviceName: readString(service, 'serviceName', 'ServiceName'),
+    desiredCount: readNumber(service, 'desiredCount', 'DesiredCount'),
+    runningCount: readNumber(service, 'runningCount', 'RunningCount'),
     runningTaskArns,
     targetGroupArns,
     complete: true,
@@ -36,12 +41,12 @@ export function normaliseService(service: JsonObject, clusterName: string): Json
 export function normaliseTasks(tasks: readonly JsonObject[]): JsonObject {
   const normalised = tasks
     .map((task) => ({
-      taskArn: typeof task['taskArn'] === 'string' ? task['taskArn'] : '',
-      lastStatus: typeof task['lastStatus'] === 'string' ? task['lastStatus'] : '',
-      desiredStatus: typeof task['desiredStatus'] === 'string' ? task['desiredStatus'] : '',
-      stoppedAt: typeof task['stoppedAt'] === 'string' ? task['stoppedAt'] : null,
-      startedAt: typeof task['startedAt'] === 'string' ? task['startedAt'] : null,
-      stoppedReason: typeof task['stoppedReason'] === 'string' ? task['stoppedReason'] : null,
+      taskArn: readString(task, 'taskArn', 'TaskArn'),
+      lastStatus: readString(task, 'lastStatus', 'LastStatus'),
+      desiredStatus: readString(task, 'desiredStatus', 'DesiredStatus'),
+      stoppedAt: readString(task, 'stoppedAt', 'StoppedAt') || null,
+      startedAt: readString(task, 'startedAt', 'StartedAt') || null,
+      stoppedReason: readString(task, 'stoppedReason', 'StoppedReason') || null,
     }))
     .sort((left, right) => left.taskArn.localeCompare(right.taskArn));
   return { tasks: normalised, complete: true };
@@ -50,18 +55,11 @@ export function normaliseTasks(tasks: readonly JsonObject[]): JsonObject {
 export function normaliseTargetGroups(groups: readonly JsonObject[]): JsonObject {
   const targetGroups = groups
     .map((group) => {
-      const matcher = asObject(group['matcher']);
-      const httpCode =
-        typeof matcher['HttpCode'] === 'string'
-          ? matcher['HttpCode']
-          : typeof matcher['httpCode'] === 'string'
-            ? matcher['httpCode']
-            : '';
+      const matcher = asObject(readValue(group, 'matcher', 'Matcher'));
       return {
-        targetGroupArn: typeof group['targetGroupArn'] === 'string' ? group['targetGroupArn'] : '',
-        healthCheckPath:
-          typeof group['healthCheckPath'] === 'string' ? group['healthCheckPath'] : '',
-        matcher: httpCode,
+        targetGroupArn: readString(group, 'targetGroupArn', 'TargetGroupArn'),
+        healthCheckPath: readString(group, 'healthCheckPath', 'HealthCheckPath'),
+        matcher: readString(matcher, 'HttpCode', 'httpCode'),
       };
     })
     .sort((left, right) => left.targetGroupArn.localeCompare(right.targetGroupArn));
@@ -74,17 +72,12 @@ export function normaliseTargetHealth(
 ): JsonObject {
   const targets = descriptions
     .map((item) => {
-      const target = asObject(item['target']);
-      const health = asObject(item['targetHealth'] ?? item);
+      const target = asObject(readValue(item, 'target', 'Target'));
+      const health = asObject(readValue(item, 'targetHealth', 'TargetHealth') ?? item);
       return {
-        id:
-          typeof target['id'] === 'string'
-            ? target['id']
-            : typeof item['id'] === 'string'
-              ? item['id']
-              : '',
-        state: typeof health['state'] === 'string' ? health['state'] : '',
-        reason: typeof health['reason'] === 'string' ? health['reason'] : '',
+        id: readString(target, 'id', 'Id') || readString(item, 'id', 'Id'),
+        state: readString(health, 'state', 'State'),
+        reason: readString(health, 'reason', 'Reason'),
       };
     })
     .sort((left, right) => left.id.localeCompare(right.id));
@@ -94,45 +87,19 @@ export function normaliseTargetHealth(
 export function normaliseAlarms(alarms: readonly JsonObject[], complete: boolean): JsonObject {
   const normalised = alarms
     .map((alarm) => {
-      const dimensions = objectList(alarm['dimensions'])
+      const dimensions = objectList(readValue(alarm, 'dimensions', 'Dimensions'))
         .map((dimension) => ({
-          name:
-            typeof dimension['name'] === 'string'
-              ? dimension['name']
-              : typeof dimension['Name'] === 'string'
-                ? dimension['Name']
-                : '',
-          value:
-            typeof dimension['value'] === 'string'
-              ? dimension['value']
-              : typeof dimension['Value'] === 'string'
-                ? dimension['Value']
-                : '',
+          name: readString(dimension, 'name', 'Name'),
+          value: readString(dimension, 'value', 'Value'),
         }))
         .sort((left, right) => left.name.localeCompare(right.name));
-      const actions = stringList(alarm['alarmActions'] ?? alarm['AlarmActions']);
       return {
-        alarmName:
-          typeof alarm['alarmName'] === 'string'
-            ? alarm['alarmName']
-            : typeof alarm['AlarmName'] === 'string'
-              ? alarm['AlarmName']
-              : '',
-        namespace:
-          typeof alarm['namespace'] === 'string'
-            ? alarm['namespace']
-            : typeof alarm['Namespace'] === 'string'
-              ? alarm['Namespace']
-              : '',
-        metricName:
-          typeof alarm['metricName'] === 'string'
-            ? alarm['metricName']
-            : typeof alarm['MetricName'] === 'string'
-              ? alarm['MetricName']
-              : '',
+        alarmName: readString(alarm, 'alarmName', 'AlarmName'),
+        namespace: readString(alarm, 'namespace', 'Namespace'),
+        metricName: readString(alarm, 'metricName', 'MetricName'),
         dimensions,
         actionsEnabled: alarm['actionsEnabled'] === true || alarm['ActionsEnabled'] === true,
-        alarmActions: actions,
+        alarmActions: stringList(readValue(alarm, 'alarmActions', 'AlarmActions')),
       };
     })
     .sort((left, right) => left.alarmName.localeCompare(right.alarmName));
@@ -142,18 +109,8 @@ export function normaliseAlarms(alarms: readonly JsonObject[], complete: boolean
 export function normaliseMetrics(datapoints: readonly JsonObject[], complete: boolean): JsonObject {
   const points = datapoints
     .map((point) => ({
-      timestamp:
-        typeof point['timestamp'] === 'string'
-          ? point['timestamp']
-          : typeof point['Timestamp'] === 'string'
-            ? point['Timestamp']
-            : '',
-      value:
-        typeof point['value'] === 'number'
-          ? point['value']
-          : typeof point['Value'] === 'number'
-            ? point['Value']
-            : 0,
+      timestamp: readString(point, 'timestamp', 'Timestamp'),
+      value: readNumber(point, 'value', 'Value'),
     }))
     .filter((point) => point.timestamp.length > 0)
     .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
@@ -183,7 +140,7 @@ export function newestMetricTimestamp(payload: JsonObject): string | undefined {
 }
 
 export function clusterOfService(service: JsonObject): string | undefined {
-  const arn = typeof service['clusterArn'] === 'string' ? service['clusterArn'] : '';
+  const arn = readString(service, 'clusterArn', 'ClusterArn');
   return clusterNameFromArn(arn);
 }
 

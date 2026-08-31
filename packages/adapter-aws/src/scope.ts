@@ -9,6 +9,7 @@ import {
   type ResourceRef,
 } from '@grounds/domain';
 import { type AwsPage } from './operations.js';
+import { readString } from './fields.js';
 
 export const DEFAULT_ALLOWED_SCOPE: ResourceRef = {
   provider: 'aws',
@@ -31,11 +32,11 @@ export function assertCallerAccount(accountId: string, scope: ResourceRef): void
 
 export function assertServiceInScope(scope: ResourceRef, service: JsonObject): void {
   const identity = splitEcsResourceId(scope.resourceId);
-  const arn = typeof service['serviceArn'] === 'string' ? service['serviceArn'] : '';
+  const arn = readString(service, 'serviceArn', 'ServiceArn');
   const account = accountFromArn(arn) ?? scope.accountId;
   const region = regionFromArn(arn) ?? scope.region;
-  const name = typeof service['serviceName'] === 'string' ? service['serviceName'] : '';
-  const clusterArn = typeof service['clusterArn'] === 'string' ? service['clusterArn'] : '';
+  const name = readString(service, 'serviceName', 'ServiceName');
+  const clusterArn = readString(service, 'clusterArn', 'ClusterArn');
   const clusterName = clusterNameFromArn(clusterArn);
   if (
     account !== scope.accountId ||

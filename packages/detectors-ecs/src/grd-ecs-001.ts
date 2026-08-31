@@ -36,7 +36,7 @@ export class GrdEcs001 implements Detector {
     const healthObs = observationsOfKind(input.observations, ELB_TARGET_HEALTH_KIND)[0];
     const metricObs = observationsOfKind(input.observations, CW_RUNNING_TASK_METRIC_KIND)[0];
     const cited = [serviceObs, tasksObs, groupsObs, healthObs, metricObs].filter(
-      (item): item is NonNullable<typeof item> => item !== undefined,
+      (item): item is NonNullable<typeof item> => item !== undefined && !requiredUnusable(item),
     );
     const observationIds = (cited.length > 0 ? cited : input.observations).map((item) => item.id);
     if (observationIds.length === 0) {
@@ -99,11 +99,10 @@ export class GrdEcs001 implements Detector {
       ).length;
       const snapshotDeficit = service.desiredCount - service.runningCount;
       const snapshotHits = snapshotDeficit >= parameters.runningDeficitThreshold;
-      const metricHits = sustainedDeficit(
-        metrics,
-        service.desiredCount,
-        parameters.deficitSustainedFraction,
-      );
+      const metricHits =
+        metricObs !== undefined &&
+        !requiredUnusable(metricObs) &&
+        sustainedDeficit(metrics, service.desiredCount, parameters.deficitSustainedFraction);
       const replacementHits = replacements >= parameters.replacementCountThreshold;
       const deficitHits = snapshotHits || metricHits;
       if (unhealthy && (replacementHits || deficitHits)) {

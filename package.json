@@ -18,8 +18,9 @@
     "sbom": "node scripts/sbom.mjs",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "scan:licenses": "node scripts/scan-licenses.mjs",
+    "scan:deps": "node scripts/scan-deps.mjs",
     "build": "tsc -b --pretty false && pnpm --filter @grounds/web build",
-    "verify": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm test && pnpm test:integration && pnpm test:contract && pnpm test:e2e && pnpm sbom && pnpm scan:secrets && pnpm scan:licenses && pnpm build"
+    "verify": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm test && pnpm test:integration && pnpm test:contract && pnpm test:e2e && pnpm sbom && pnpm scan:secrets && pnpm scan:licenses && pnpm scan:deps && pnpm build"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

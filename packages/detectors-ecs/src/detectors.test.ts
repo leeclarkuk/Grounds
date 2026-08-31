@@ -269,6 +269,42 @@ describe('GRD-ECS-001', () => {
     const second = detector.evaluate(input(baseObservations())).fingerprint;
     expect(first).toBe(second);
   });
+
+  it('does not FAIL from stale metric deficit alone', () => {
+    const observations = baseObservations();
+    const health = observations.find((item) => item.kind === ELB_TARGET_HEALTH_KIND);
+    const metric = observations.find((item) => item.kind === CW_RUNNING_TASK_METRIC_KIND);
+    if (!health || !metric) {
+      throw new Error('missing');
+    }
+    observations.splice(
+      observations.indexOf(health),
+      1,
+      obs(ELB_TARGET_HEALTH_KIND, {
+        targetGroupArn: TG,
+        targets: [{ id: 'i-1', state: 'unhealthy', reason: 'Target.FailedHealthChecks' }],
+        complete: true,
+      }),
+    );
+    observations.splice(
+      observations.indexOf(metric),
+      1,
+      obs(
+        CW_RUNNING_TASK_METRIC_KIND,
+        {
+          datapoints: [
+            { timestamp: '2026-08-31T00:10:00.000Z', value: 0 },
+            { timestamp: '2026-08-31T00:20:00.000Z', value: 0 },
+          ],
+          complete: true,
+        },
+        { freshness: 'STALE' },
+      ),
+    );
+    const finding = detector.evaluate(input(observations));
+    expect(finding.result).toBe('PASS');
+    expect(finding.observationIds).not.toContain(metric.id);
+  });
 });
 
 describe('GRD-OBS-001', () => {
@@ -398,5 +434,22 @@ describe('GRD-OBS-001', () => {
     const finding = detector.evaluate(input(withoutHostAlarm));
     expect(finding.result).toBe('PASS');
     expect(finding.explanation).not.toMatch(/owner is notified/i);
+  });
+
+  it('returns UNKNOWN when the ECS service observation is inaccessible or stale', () => {
+    const inaccessibleService = baseObservations().map((item) =>
+      item.kind === ECS_SERVICE_KIND
+        ? {
+            ...item,
+            inaccessible: true,
+            payload: { inaccessible: true, complete: false, errorCode: 'unavailable' },
+          }
+        : item,
+    );
+    expect(detector.evaluate(input(inaccessibleService)).result).toBe('UNKNOWN');
+    const staleService = baseObservations().map((item) =>
+      item.kind === ECS_SERVICE_KIND ? { ...item, freshness: 'STALE' as const } : item,
+    );
+    expect(detector.evaluate(input(staleService)).result).toBe('UNKNOWN');
   });
 });

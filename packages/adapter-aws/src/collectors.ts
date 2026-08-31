@@ -36,6 +36,7 @@ import {
 } from './normalise.js';
 import { assertServiceInScope, assertTargetGroupInScope, objectList, stringList } from './scope.js';
 import { FixtureUnavailableError } from './fixture-operations.js';
+import { readValue } from './fields.js';
 
 export async function collectInventory(
   operations: AwsOperations,
@@ -52,7 +53,7 @@ export async function collectInventory(
       context,
     );
     await context.onPage();
-    const services = objectList(serviceResponse['services']);
+    const services = objectList(readValue(serviceResponse, 'services', 'Services'));
     if (services.length !== 1 || !services[0]) {
       return allInaccessible(REQUIRED_INVENTORY_KINDS, context, 'incomplete');
     }
@@ -82,7 +83,7 @@ export async function collectInventory(
           context,
         );
         await context.onPage();
-        taskArns.push(...stringList(page.payload['taskArns']));
+        taskArns.push(...stringList(readValue(page.payload, 'taskArns', 'TaskArns')));
         taskToken = page.nextToken;
       } while (taskToken);
     }
@@ -104,7 +105,7 @@ export async function collectInventory(
         context,
         ECS_TASKS_KIND,
         ECS_DESCRIBE_TASKS,
-        normaliseTasks(objectList(described['tasks'])),
+        normaliseTasks(objectList(readValue(described, 'tasks', 'Tasks'))),
         {
           clusterName: identity.clusterName,
           taskArns: uniqueTaskArns,
@@ -127,7 +128,7 @@ export async function collectInventory(
             context,
             ELB_TARGET_GROUP_KIND,
             ELB_DESCRIBE_TARGET_GROUPS,
-            normaliseTargetGroups(objectList(groups['targetGroups'])),
+            normaliseTargetGroups(objectList(readValue(groups, 'targetGroups', 'TargetGroups'))),
             { targetGroupArns },
           ),
         );
@@ -174,7 +175,7 @@ export async function collectInventory(
         context,
         ELB_TARGET_GROUP_KIND,
         ELB_DESCRIBE_TARGET_GROUPS,
-        normaliseTargetGroups(objectList(groups['targetGroups'])),
+        normaliseTargetGroups(objectList(readValue(groups, 'targetGroups', 'TargetGroups'))),
         { targetGroupArns },
       ),
     );
@@ -186,7 +187,11 @@ export async function collectInventory(
         context,
       );
       await context.onPage();
-      healthTargets.push(...objectList(page.payload['targetHealthDescriptions']));
+      healthTargets.push(
+        ...objectList(
+          readValue(page.payload, 'targetHealthDescriptions', 'TargetHealthDescriptions'),
+        ),
+      );
       healthToken = page.nextToken;
     } while (healthToken);
     observations.push(
@@ -221,7 +226,7 @@ export async function collectTelemetry(
       const page = await retryOp(() => operations.describeAlarms(alarmToken), context);
       await context.onPage();
       pages += 1;
-      alarms.push(...objectList(page.payload['metricAlarms'] ?? page.payload['MetricAlarms']));
+      alarms.push(...objectList(readValue(page.payload, 'metricAlarms', 'MetricAlarms')));
       alarmToken = page.nextToken;
       if (pages >= ALARM_PAGE_BOUND && alarmToken) {
         complete = false;
@@ -255,18 +260,20 @@ export async function collectTelemetry(
         context,
       );
       await context.onPage();
-      const results = objectList(
-        page.payload['metricDataResults'] ?? page.payload['MetricDataResults'],
-      );
+      const results = objectList(readValue(page.payload, 'metricDataResults', 'MetricDataResults'));
       for (const result of results) {
-        const timestamps = Array.isArray(result['timestamps']) ? result['timestamps'] : [];
-        const values = Array.isArray(result['values']) ? result['values'] : [];
+        const timestamps = Array.isArray(readValue(result, 'timestamps', 'Timestamps'))
+          ? (readValue(result, 'timestamps', 'Timestamps') as unknown[])
+          : [];
+        const values = Array.isArray(readValue(result, 'values', 'Values'))
+          ? (readValue(result, 'values', 'Values') as unknown[])
+          : [];
         timestamps.forEach((timestamp, index) => {
           if (typeof timestamp === 'string' && typeof values[index] === 'number') {
             metricPoints.push({ timestamp, value: values[index] });
           }
         });
-        metricPoints.push(...objectList(result['datapoints']));
+        metricPoints.push(...objectList(readValue(result, 'datapoints', 'Datapoints')));
       }
       metricToken = page.nextToken;
     } while (metricToken);
