@@ -22,6 +22,12 @@
     "build": "tsc -b --pretty false && pnpm --filter @grounds/web build",
     "verify": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm test && pnpm test:integration && pnpm test:contract && pnpm test:e2e && pnpm sbom && pnpm scan:secrets && pnpm scan:licenses && pnpm scan:deps && pnpm build"
   },
+  "pnpm": {
+    "overrides": {
+      "postcss": "8.5.26",
+      "sharp": "0.35.4"
+    }
+  },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@grounds/adapter-aws": "workspace:*",

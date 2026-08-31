@@ -15,7 +15,6 @@ const sbom = {
   specVersion: '1.5',
   version: 1,
   metadata: {
-    timestamp: new Date().toISOString(),
     component: { name: 'grounds', type: 'application' },
   },
   components: unique.map((item) => ({ type: 'library', name: item.name, version: item.version })),

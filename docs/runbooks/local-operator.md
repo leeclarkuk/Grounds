@@ -13,7 +13,9 @@ pnpm install --frozen-lockfile
 pnpm verify
 ```
 
-`pnpm verify` runs format, typecheck, lint, unit, PostgreSQL integration, adapter contract, end-to-end fixture runs, SBOM, secret scan, licence scan and build. It never calls live AWS.
+`pnpm verify` runs format, typecheck, lint, unit, PostgreSQL integration, adapter contract, end-to-end fixture runs, SBOM, secret scan, licence scan, high-severity dependency audit and build. It never calls live AWS.
+
+Next.js still ships `postcss` 8.4.31 and `sharp` 0.34.x. Root `pnpm.overrides` pin those to `postcss@8.5.26` and `sharp@0.35.4` so `pnpm scan:deps` fails closed on high-severity advisories rather than waiting for a Next patch. The SBOM digest is derived from the lockfile only, so it is stable across runs.
 
 ## Local stack
 
