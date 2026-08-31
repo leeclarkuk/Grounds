@@ -730,12 +730,15 @@ class PostgresTx implements OrchestrationTx {
     leaseEpoch: number,
   ): Promise<void> {
     this.assertFence(fence, workerId, leaseEpoch, 'collect');
-    await this.client.query(
+    const completed = await this.client.query(
       `UPDATE run_steps
        SET state = 'succeeded', lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
        WHERE id = $1 AND lease_owner = $2 AND lease_epoch = $3 AND state = 'leased'`,
       [fence.step.id, workerId, leaseEpoch],
     );
+    if ((completed.rowCount ?? 0) !== 1) {
+      throw new FenceLostError();
+    }
     await this.client.query(
       `UPDATE run_steps SET state = 'ready', updated_at = now() WHERE run_id = $1 AND step_type = 'evaluate' AND state = 'blocked'`,
       [fence.run.id],

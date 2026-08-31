@@ -111,6 +111,9 @@ export class WorkerLoop {
 
 export class CrashAfterObservationsError extends Error {
   public override readonly name = 'CrashAfterObservationsError';
+  public constructor() {
+    super('CrashAfterObservations');
+  }
 }
 
 export { EnqueueRun, FailClaimedStep };

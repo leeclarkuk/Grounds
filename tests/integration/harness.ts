@@ -1,17 +1,31 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import pg from 'pg';
 
-import { PostgresOrchestrationStore } from '@grounds/persistence-postgres';
-import { createPool, migrateUp } from '@grounds/persistence-postgres';
+import {
+  createPool,
+  PostgresOrchestrationStore,
+  migrateUp,
+  type Pool,
+} from '@grounds/persistence-postgres';
 
 export type TestDb = {
-  readonly container: StartedPostgreSqlContainer;
-  readonly pool: pg.Pool;
+  readonly container: StartedPostgreSqlContainer | undefined;
+  readonly pool: Pool;
   readonly store: PostgresOrchestrationStore;
   readonly url: string;
 };
 
 export async function startTestDb(): Promise<TestDb> {
+  const configured = process.env['GROUNDS_TEST_DATABASE_URL'];
+  if (configured) {
+    const admin = createPool(configured);
+    const name = `grounds_it_${String(Date.now())}`;
+    await admin.query(`CREATE DATABASE ${name}`);
+    await admin.end();
+    const url = configured.replace(/\/[^/]+$/, `/${name}`);
+    const pool = createPool(url);
+    await migrateUp(pool);
+    return { container: undefined, pool, store: new PostgresOrchestrationStore(pool), url };
+  }
   const container = await new PostgreSqlContainer('postgres:16.10-alpine').start();
   const url = container.getConnectionUri();
   const pool = createPool(url);
@@ -19,7 +33,20 @@ export async function startTestDb(): Promise<TestDb> {
   return { container, pool, store: new PostgresOrchestrationStore(pool), url };
 }
 
-export async function stopTestDb(db: TestDb): Promise<void> {
+export async function resetDomainTables(pool: Pool): Promise<void> {
+  await pool.query(`
+    TRUNCATE finding_citations, findings, observations, events, outbox, cases,
+             run_steps, assurance_runs, authorisation_grants, profile_versions
+    RESTART IDENTITY CASCADE
+  `);
+}
+
+export async function stopTestDb(db: TestDb | undefined): Promise<void> {
+  if (!db) {
+    return;
+  }
   await db.pool.end();
-  await db.container.stop();
+  if (db.container) {
+    await db.container.stop();
+  }
 }

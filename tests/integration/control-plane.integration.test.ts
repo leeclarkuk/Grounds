@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   CancelRun,
@@ -23,7 +23,7 @@ import {
 } from '@grounds/test-support';
 import { WorkerLoop } from '@grounds/worker';
 import { buildApi } from '../../apps/api/src/app.js';
-import { startTestDb, stopTestDb, type TestDb } from './harness.js';
+import { startTestDb, stopTestDb, resetDomainTables, type TestDb } from './harness.js';
 
 const OTHER_SERVICE = { ...PAYMENTS_SERVICE, resourceId: 'other' };
 
@@ -36,6 +36,14 @@ describe('Build 0 control plane', () => {
 
   afterAll(async () => {
     await stopTestDb(db);
+  });
+
+  beforeEach(async () => {
+    if (await isSchemaReady(db.pool)) {
+      await resetDomainTables(db.pool);
+    } else {
+      await migrateUp(db.pool);
+    }
   });
 
   async function enqueueRun(inventory: FakeInventory = new FakeInventory()) {

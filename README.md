@@ -12,7 +12,7 @@ The product rule is: no change without grounds.
 
 This repository currently implements the Build 0 control-plane skeleton: domain types, PostgreSQL schema, lease-fenced workers, fake providers, and API liveness/readiness. It does not collect from AWS, run the ECS detectors, or serve Mission Control.
 
-Requires Node.js 24 and pnpm 10. Integration tests start a disposable PostgreSQL 16 container.
+Disposable Postgres is started with Testcontainers by default. Set `GROUNDS_TEST_DATABASE_URL` to use an already-running server instead.
 
 ```bash
 pnpm install --frozen-lockfile
