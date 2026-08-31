@@ -4,18 +4,18 @@
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending_authorisation
-    pending_authorisation --> queued: grant consumed
+    [*] --> queued: grant consumed in enqueue transaction
     queued --> collecting: collect lease acquired
     collecting --> evaluating: collect succeeded
     evaluating --> healthy: all detectors PASS
     evaluating --> findings: any FAIL or UNKNOWN
     collecting --> failed: orchestration fault
     evaluating --> failed: orchestration fault
-    pending_authorisation --> cancelled
     queued --> cancelled
     collecting --> cancelled
 ```
+
+The persisted initial state is `queued`. `pending_authorisation` is not a durable row in Builds 0 and 1.
 
 `healthy` requires every pinned detector to return PASS. Any UNKNOWN terminates as `findings`. Evaluating is not cancellable. A cancel requested during evaluate is recorded and ignored for that in-flight lease.
 

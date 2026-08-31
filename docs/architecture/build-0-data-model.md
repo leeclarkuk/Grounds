@@ -67,7 +67,7 @@ Trigger: the only permitted update is `consumed_at` from null to a timestamp. Al
 - `evidence_window_to` timestamptz not null
 - `detector_versions` jsonb not null
 - `state` text not null check (state in (
-    'pending_authorisation', 'queued', 'collecting', 'evaluating',
+    'queued', 'collecting', 'evaluating',
     'healthy', 'findings', 'failed', 'cancelled'
   ))
 - `result` text null check (result is null or result in ('PASS', 'FAIL', 'UNKNOWN'))
@@ -75,15 +75,24 @@ Trigger: the only permitted update is `consumed_at` from null to a timestamp. Al
 - `request_digest` text not null
 - `run_identity_digest` text not null unique
 - `cancel_requested_at` timestamptz null
+- `collector_attempt_count` integer not null default 0 check (collector_attempt_count >= 0)
 - `created_at` timestamptz not null default now()
 - `updated_at` timestamptz not null default now()
 - `terminal_at` timestamptz null
 
 Check `evidence_window_from < evidence_window_to`.
+Check correlated terminal truth:
+
+- `state = 'healthy'` implies `result = 'PASS'` and `terminal_at` is not null
+- `state = 'findings'` implies `result in ('FAIL', 'UNKNOWN')` and `terminal_at` is not null
+- `state in ('queued', 'collecting', 'evaluating')` implies `result` is null and `terminal_at` is null
+- `state in ('failed', 'cancelled')` implies `result` is null and `terminal_at` is not null
+
+`pending_authorisation` is not persisted in Builds 0 and 1.
 Unique `(id, organisation_id)` and unique `(id, profile_version_id)`.
 Foreign key `(profile_version_id, organisation_id)` references `profile_versions (id, organisation_id)`.
 Foreign key `(authorisation_grant_id, organisation_id, profile_version_id)` references `authorisation_grants (id, organisation_id, profile_version_id)`.
-Requires unique `(id, organisation_id, profile_version_id)` on `authorisation_grants`.
+Trigger: run `resource_scope_digest`, evidence window, `organisation_id`, `profile_version_id` and `detector_versions` must equal the consumed grant.
 
 ### run_steps
 
@@ -96,7 +105,9 @@ Requires unique `(id, organisation_id, profile_version_id)` on `authorisation_gr
 - `lease_owner` text null
 - `lease_expires_at` timestamptz null
 - `lease_epoch` bigint not null default 0 check (lease_epoch >= 0)
-- `error_class` text null
+- `error_class` text null check (error_class is null or error_class in (
+    'attempts_exhausted', 'persist_failure', 'invariant_violation', 'cancelled'
+  ))
 - `error_message` text null
 - `updated_at` timestamptz not null default now()
 
@@ -128,6 +139,7 @@ Check: if `state in ('blocked', 'ready')` then `lease_owner` is null.
 - `created_at` timestamptz not null default now()
 
 Unique `(run_id, content_identity)`. Unique `(id, run_id)`.
+Foreign key `(run_id, organisation_id)` references `assurance_runs (id, organisation_id)`.
 Trigger rejects `UPDATE` and `DELETE`.
 
 ### findings
@@ -143,12 +155,14 @@ Trigger rejects `UPDATE` and `DELETE`.
 - `title` text not null
 - `explanation` text not null
 - `fingerprint` text not null
+- `citation_count` integer not null check (citation_count >= 1)
 - `evaluated_at` timestamptz not null
 
 Unique `(run_id, fingerprint)`. Unique `(id, run_id)`.
 Foreign key `profile_version_id` references `profile_versions (id)`.
+Foreign key `(run_id, profile_version_id)` references `assurance_runs (id, profile_version_id)`.
 Trigger rejects `UPDATE` and `DELETE`.
-At least one `finding_citations` row is required (deferrable constraint or insert-in-same-transaction check).
+Deferred constraint trigger: `citation_count` equals `count(*)` from `finding_citations` for that finding at commit.
 
 ### finding_citations
 
@@ -160,6 +174,7 @@ At least one `finding_citations` row is required (deferrable constraint or inser
 - foreign key `(observation_id, run_id)` references `observations (id, run_id)`
 
 A finding cannot cite a missing observation or an observation from another run.
+Trigger rejects `UPDATE` and `DELETE`. Tests must cover empty citations, cross-run citations, later addition after commit, update and deletion.
 
 ### cases
 

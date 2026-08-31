@@ -256,6 +256,8 @@ stateDiagram-v2
 
 The run result summary is `FAIL` if any detector returned `FAIL`, else `UNKNOWN` if any returned `UNKNOWN`, else `PASS`. `failed` remains an orchestration fault, not a missing-evidence outcome.
 
+Builds 0 and 1 persist the run as `queued` in the same transaction that consumes the grant. `pending_authorisation` is not a durable row.
+
 ### Assurance case, reserved for later milestones
 
 ```mermaid
@@ -285,7 +287,7 @@ stateDiagram-v2
 | `findings` | Detector output and cited observations |
 | `cases` | Deduplicated issue lifecycle; schema present, workflow deferred |
 | `events` | Append-only state and audit events with per-aggregate sequence |
-| `outbox` | Durable external intent; schema and fake reconciler in Build 0 |
+| `outbox` | Durable external intent; schema and lag metric only. No reconciler and no rows in Builds 0 and 1 |
 
 Database constraints must enforce uniqueness for:
 
@@ -598,7 +600,7 @@ These are release blockers, not guidance.
 19. Lease fencing protects every durable step commit.
 20. Finding uniqueness is `(run_id, fingerprint)`. Repeated fingerprints across runs deduplicate into one case when that workflow is authorised.
 21. Learned knowledge requires human approval, versioning, provenance and expiry.
-22. Every run records cost, duration, provenance and evidence.
+22. Every terminal run records duration, provenance and evidence appropriate to its state. Evaluated runs cite observations. Monetary cloud cost is not claimed in Builds 0 and 1.
 
 ## 19. Definition of done for the authorised build
 
