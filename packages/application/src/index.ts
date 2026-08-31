@@ -1,3 +1,4 @@
+export { OutOfScopeError } from '@grounds/domain';
 export { CancelRun } from './cancel-run.js';
 export { CollectStep, isFenceLost } from './collect-step.js';
 export { EnqueueRun } from './enqueue-run.js';

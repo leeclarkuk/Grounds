@@ -463,30 +463,40 @@ class PostgresTx implements OrchestrationTx {
     leaseTtlSeconds: number,
   ): Promise<ClaimedWork | undefined> {
     const candidate = await this.client.query(
-      `SELECT r.id AS run_id, s.id AS step_id
-       FROM assurance_runs r
-       INNER JOIN run_steps s ON s.run_id = r.id
-       WHERE (s.next_attempt_at IS NULL OR s.next_attempt_at <= now())
-         AND (
-           (s.step_type = 'collect' AND r.state IN ('queued', 'collecting') AND r.cancel_requested_at IS NULL)
-           OR (s.step_type = 'evaluate' AND r.state = 'evaluating')
+      `WITH locked_run AS (
+         SELECT r.id
+         FROM assurance_runs r
+         WHERE EXISTS (
+           SELECT 1
+           FROM run_steps s
+           WHERE s.run_id = r.id
+             AND (s.next_attempt_at IS NULL OR s.next_attempt_at <= now())
+             AND (
+               (s.step_type = 'collect' AND r.state IN ('queued', 'collecting') AND r.cancel_requested_at IS NULL)
+               OR (s.step_type = 'evaluate' AND r.state = 'evaluating')
+             )
+             AND (
+               s.state = 'ready'
+               OR (s.state = 'leased' AND s.lease_expires_at < now())
+             )
          )
-         AND (
-           s.state = 'ready'
-           OR (s.state = 'leased' AND s.lease_expires_at < now())
-         )
-       ORDER BY r.created_at ASC, CASE s.step_type WHEN 'collect' THEN 0 ELSE 1 END
-       FOR UPDATE OF r SKIP LOCKED
-       LIMIT 1`,
+         ORDER BY r.created_at ASC
+         FOR UPDATE SKIP LOCKED
+         LIMIT 1
+       )
+       SELECT id AS run_id FROM locked_run`,
     );
-    const picked = candidate.rows[0] as { run_id: string; step_id: string } | undefined;
+    const picked = candidate.rows[0] as { run_id: string } | undefined;
     if (!picked) {
       return undefined;
     }
     const run = await this.lockRun(picked.run_id);
     const collect = await this.lockNamedStep(run.id, 'collect');
     const evaluate = await this.lockNamedStep(run.id, 'evaluate');
-    const step = collect.id === picked.step_id ? collect : evaluate;
+    const step = this.claimableStep(run, collect, evaluate);
+    if (!step) {
+      return undefined;
+    }
     if (step.attempt >= MAX_STEP_ATTEMPTS) {
       await this.exhaust(run, step);
       return {
@@ -990,6 +1000,38 @@ class PostgresTx implements OrchestrationTx {
     ) {
       throw new FenceLostError();
     }
+  }
+
+  private claimableStep(
+    run: AssuranceRun,
+    collect: RunStep,
+    evaluate: RunStep,
+  ): RunStep | undefined {
+    if (this.stepIsClaimable(run, collect)) {
+      return collect;
+    }
+    if (this.stepIsClaimable(run, evaluate)) {
+      return evaluate;
+    }
+    return undefined;
+  }
+
+  private stepIsClaimable(run: AssuranceRun, step: RunStep): boolean {
+    const due = step.nextAttemptAt === null || Date.parse(step.nextAttemptAt) <= Date.now();
+    const available =
+      step.state === 'ready' ||
+      (step.state === 'leased' &&
+        step.leaseExpiresAt !== null &&
+        Date.parse(step.leaseExpiresAt) < Date.now());
+    if (!due || !available) {
+      return false;
+    }
+    if (step.stepType === 'collect') {
+      return (
+        (run.state === 'queued' || run.state === 'collecting') && run.cancelRequestedAt === null
+      );
+    }
+    return run.state === 'evaluating';
   }
 }
 

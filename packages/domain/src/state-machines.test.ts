@@ -20,16 +20,23 @@ import {
 import { ERROR_MESSAGES } from './error-class.js';
 
 describe('run state machine', () => {
-  const allowedPairs = new Set(
-    RUN_STATES.flatMap((from) => allowedRunTransitions(from).map((to) => `${from}->${to}`)),
-  );
+  const allowed: { readonly [from: string]: readonly string[] } = {
+    queued: ['collecting', 'cancelled'],
+    collecting: ['evaluating', 'failed', 'cancelled'],
+    evaluating: ['healthy', 'findings', 'failed'],
+    healthy: [],
+    findings: [],
+    failed: [],
+    cancelled: [],
+  };
 
   it.each(RUN_STATES.flatMap((from) => RUN_STATES.map((to) => [from, to] as const)))(
     '%s -> %s',
     (from, to) => {
-      const allowed = allowedPairs.has(`${from}->${to}`);
-      expect(isLegalRunTransition(from, to)).toBe(allowed);
-      if (allowed) {
+      const permitted = allowed[from]?.includes(to) === true;
+      expect(isLegalRunTransition(from, to)).toBe(permitted);
+      expect(allowedRunTransitions(from)).toEqual(allowed[from]);
+      if (permitted) {
         expect(() => assertRunTransition(from, to)).not.toThrow();
       } else {
         expect(() => assertRunTransition(from, to)).toThrow(/illegal run transition/);
@@ -47,16 +54,22 @@ describe('run state machine', () => {
 });
 
 describe('step state machine', () => {
-  const allowedPairs = new Set(
-    STEP_STATES.flatMap((from) => allowedStepTransitions(from).map((to) => `${from}->${to}`)),
-  );
+  const allowed: { readonly [from: string]: readonly string[] } = {
+    blocked: ['ready'],
+    ready: ['leased', 'failed', 'cancelled'],
+    leased: ['leased', 'ready', 'succeeded', 'failed', 'cancelled'],
+    succeeded: [],
+    failed: [],
+    cancelled: [],
+  };
 
   it.each(STEP_STATES.flatMap((from) => STEP_STATES.map((to) => [from, to] as const)))(
     '%s -> %s',
     (from: StepState, to: StepState) => {
-      const allowed = allowedPairs.has(`${from}->${to}`);
-      expect(isLegalStepTransition(from, to)).toBe(allowed);
-      if (allowed) {
+      const permitted = allowed[from]?.includes(to) === true;
+      expect(isLegalStepTransition(from, to)).toBe(permitted);
+      expect(allowedStepTransitions(from)).toEqual(allowed[from]);
+      if (permitted) {
         expect(() => assertStepTransition(from, to)).not.toThrow();
       } else {
         expect(() => assertStepTransition(from, to)).toThrow(/illegal step transition/);

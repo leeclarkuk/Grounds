@@ -30,10 +30,12 @@ export async function seedProfileAndGrant(
     readonly expiresAt?: string;
     readonly freshnessMaxAgeSeconds?: number;
     readonly grantIdempotencyKey?: string;
+    readonly grantResource?: ResourceRef;
   },
 ) {
   const organisationId = options?.organisationId ?? DEV_ORG;
   const resource = options?.resource ?? PAYMENTS_SERVICE;
+  const grantResource = options?.grantResource ?? resource;
   const profileId = randomUUID();
   const grantId = randomUUID();
   const now = new Date();
@@ -67,15 +69,15 @@ export async function seedProfileAndGrant(
     organisationId,
     actorId: DEV_ACTOR,
     profileVersionId: profile.id,
-    resourceScope: resource,
-    resourceScopeDigest: resourceScopeDigest(resource),
+    resourceScope: grantResource,
+    resourceScopeDigest: resourceScopeDigest(grantResource),
     evidenceWindow: { from: windowFrom, to: windowTo },
     detectorVersions,
     grantedAt: now.toISOString(),
     expiresAt: options?.expiresAt ?? new Date(now.getTime() + 3_600_000).toISOString(),
     consumedAt: null,
     clientIdempotencyKey: options?.grantIdempotencyKey ?? randomUUID(),
-    requestDigest: sha256Canonical({ grant: 'create', resource }),
+    requestDigest: sha256Canonical({ grant: 'create', resource: grantResource }),
   });
   return { profile, grant };
 }

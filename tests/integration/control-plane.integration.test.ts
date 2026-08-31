@@ -9,8 +9,14 @@ import {
   GrantNotConsumableError,
   HeartbeatLease,
   IdempotencyConflictError,
+  RetryClaimedStep,
 } from '@grounds/application';
-import { ERROR_CLASSES, ERROR_MESSAGES, FAKE_INVENTORY_KIND } from '@grounds/domain';
+import {
+  ERROR_CLASSES,
+  ERROR_MESSAGES,
+  FAKE_INVENTORY_KIND,
+  backoffSeconds,
+} from '@grounds/domain';
 import {
   appliedMigrationIds,
   isSchemaReady,
@@ -23,6 +29,7 @@ import {
   OTHER_ORG,
   PAYMENTS_SERVICE,
   seedProfileAndGrant,
+  CountingInventory,
 } from '@grounds/test-support';
 import { WorkerLoop } from '@grounds/worker';
 import { buildApi } from '../../apps/api/src/app.js';
@@ -215,12 +222,17 @@ describe('Build 0 control plane', () => {
 
   it('two workers race and only one claims the collect step', async () => {
     const seeded = await enqueueRun();
+    const queued = await db.pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM assurance_runs`,
+    );
+    expect(Number(queued.rows[0]?.n)).toBe(1);
     const [a, b] = await Promise.all([
       db.store.withTransaction((tx) => tx.claimWork('worker-a', 15)),
       db.store.withTransaction((tx) => tx.claimWork('worker-b', 15)),
     ]);
     const claimed = [a, b].filter((item) => item && !item.exhausted);
     expect(claimed).toHaveLength(1);
+    expect(claimed[0]?.run.id).toBe(seeded.run.id);
     expect(claimed[0]?.step.leaseEpoch).toBe(1);
     expect(claimed[0]?.run.state).toBe('collecting');
     expect(claimed[0]?.run.startedAt).not.toBeNull();
@@ -565,12 +577,61 @@ describe('Build 0 control plane', () => {
     expect(step?.state).toBe('failed');
   });
 
-  it('makes zero provider calls for an out-of-scope resource comparison', async () => {
-    const inventory = new FakeInventory();
-    const seeded = await db.store.withTransaction((tx) => seedProfileAndGrant(tx));
+  it('makes zero provider calls for an out-of-scope run and fails as invariant_violation', async () => {
+    const inventory = new CountingInventory(new FakeInventory());
+    const seeded = await db.store.withTransaction((tx) =>
+      seedProfileAndGrant(tx, { grantResource: OTHER_SERVICE }),
+    );
     expect(seeded.profile.scope.resourceId).toBe('payments');
-    expect(OTHER_SERVICE.resourceId).not.toBe(seeded.profile.scope.resourceId);
+    expect(seeded.grant.resourceScope.resourceId).toBe('other');
+    const run = await new EnqueueRun(db.store).execute({
+      grantId: seeded.grant.id,
+      clientIdempotencyKey: randomUUID(),
+      requestDigest: randomUUID(),
+    });
+    const worker = new WorkerLoop({
+      store: db.store,
+      inventory,
+      telemetry: new FakeTelemetry(),
+      workerId: `scope-${randomUUID()}`,
+      leaseTtlSeconds: 15,
+    });
+    await worker.runUntilIdle();
     expect(inventory.calls).toBe(0);
+    const terminal = await db.store.getRun(run.id);
+    expect(terminal?.state).toBe('failed');
+    const step = await db.store.getStep(run.id, 'collect');
+    expect(step?.state).toBe('failed');
+    expect(step?.errorClass).toBe('invariant_violation');
+    expect(step?.attempt).toBe(1);
+  });
+
+  it('retries a claimed step on the same id and honours next_attempt_at', async () => {
+    const seeded = await enqueueRun();
+    const claimed = await db.store.withTransaction((tx) => tx.claimWork('retry-w', 15));
+    if (!claimed) {
+      throw new Error('expected claim');
+    }
+    await new RetryClaimedStep(db.store).execute(claimed, 'retry-w');
+    const delayed = await db.store.getStep(seeded.run.id, 'collect');
+    expect(delayed?.state).toBe('ready');
+    expect(delayed?.attempt).toBe(1);
+    expect(delayed?.leaseOwner).toBeNull();
+    expect(delayed?.leaseExpiresAt).toBeNull();
+    expect(delayed?.nextAttemptAt).not.toBeNull();
+    const tooSoon = await db.store.withTransaction((tx) => tx.claimWork('early', 15));
+    expect(tooSoon).toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, backoffSeconds(1) * 1000 + 200));
+    const [a, b] = await Promise.all([
+      db.store.withTransaction((tx) => tx.claimWork('retry-a', 15)),
+      db.store.withTransaction((tx) => tx.claimWork('retry-b', 15)),
+    ]);
+    const recovered = [a, b].filter((item) => item && !item.exhausted);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]?.step.id).toBe(claimed.step.id);
+    expect(recovered[0]?.step.attempt).toBe(2);
+    expect(recovered[0]?.step.leaseEpoch).toBeGreaterThan(claimed.step.leaseEpoch);
+    expect(recovered[0]?.recovered).toBe(false);
   });
 
   it('exposes live and ready endpoints', async () => {

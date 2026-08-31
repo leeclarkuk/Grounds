@@ -1,4 +1,4 @@
-import { errorMessageFor, type ErrorClass } from '@grounds/domain';
+import { errorMessageFor, MAX_STEP_ATTEMPTS, type ErrorClass } from '@grounds/domain';
 import { FenceLostError } from './errors.js';
 import type { OrchestrationStore } from './store.js';
 import type { ClaimedWork } from './types.js';
@@ -69,7 +69,7 @@ export class RetryClaimedStep {
   public constructor(private readonly store: OrchestrationStore) {}
 
   public async execute(claimed: ClaimedWork, workerId: string): Promise<void> {
-    if (claimed.step.attempt >= 5) {
+    if (claimed.step.attempt >= MAX_STEP_ATTEMPTS) {
       await new FailClaimedStep(this.store).execute(claimed, workerId, 'attempts_exhausted');
       return;
     }

@@ -12,6 +12,8 @@ export type TestDb = {
   readonly pool: Pool;
   readonly store: PostgresOrchestrationStore;
   readonly url: string;
+  readonly adminUrl?: string;
+  readonly databaseName?: string;
 };
 
 export async function startTestDb(): Promise<TestDb> {
@@ -24,7 +26,14 @@ export async function startTestDb(): Promise<TestDb> {
     const url = configured.replace(/\/[^/]+$/, `/${name}`);
     const pool = createPool(url);
     await migrateUp(pool);
-    return { container: undefined, pool, store: new PostgresOrchestrationStore(pool), url };
+    return {
+      container: undefined,
+      pool,
+      store: new PostgresOrchestrationStore(pool),
+      url,
+      adminUrl: configured,
+      databaseName: name,
+    };
   }
   const container = await new PostgreSqlContainer('postgres:16.10-alpine').start();
   const url = container.getConnectionUri();
@@ -48,5 +57,10 @@ export async function stopTestDb(db: TestDb | undefined): Promise<void> {
   await db.pool.end();
   if (db.container) {
     await db.container.stop();
+  }
+  if (db.adminUrl && db.databaseName) {
+    const admin = createPool(db.adminUrl);
+    await admin.query(`DROP DATABASE IF EXISTS ${db.databaseName}`);
+    await admin.end();
   }
 }

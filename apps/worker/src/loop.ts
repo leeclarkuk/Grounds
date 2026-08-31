@@ -5,6 +5,7 @@ import {
   EvaluateStep,
   FailClaimedStep,
   HeartbeatLease,
+  OutOfScopeError,
   RetryClaimedStep,
   isFenceLost,
   type OrchestrationStore,
@@ -44,12 +45,21 @@ export class WorkerLoop {
     const heartbeat = new HeartbeatLease(this.options.store);
     const timer = setInterval(
       () => {
-        void heartbeat.execute(
-          claimed.step.id,
-          this.options.workerId,
-          claimed.step.leaseEpoch,
-          this.options.leaseTtlSeconds,
-        );
+        void heartbeat
+          .execute(
+            claimed.step.id,
+            this.options.workerId,
+            claimed.step.leaseEpoch,
+            this.options.leaseTtlSeconds,
+          )
+          .then((ok) => {
+            if (!ok) {
+              log('warn', 'heartbeat rejected');
+            }
+          })
+          .catch(() => {
+            log('warn', 'heartbeat failed');
+          });
       },
       Math.max(200, Math.floor((this.options.leaseTtlSeconds * 1000) / 3)),
     );
@@ -84,6 +94,14 @@ export class WorkerLoop {
       }
       if (isFenceLost(error)) {
         log('warn', 'fence lost');
+        return false;
+      }
+      if (error instanceof OutOfScopeError) {
+        await new FailClaimedStep(this.options.store).execute(
+          claimed,
+          this.options.workerId,
+          'invariant_violation',
+        );
         return false;
       }
       await new RetryClaimedStep(this.options.store).execute(claimed, this.options.workerId);
