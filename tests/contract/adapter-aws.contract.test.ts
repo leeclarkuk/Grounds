@@ -36,7 +36,7 @@ describe('adapter-aws fixtures', () => {
         window,
         onPage: async () => undefined,
       }),
-    ).rejects.toBeInstanceOf(OutOfScopeError);
+    ).rejects.toThrow(/outside the authorised resource scope/);
   });
 
   it('retries throttling then collects', async () => {
@@ -97,7 +97,7 @@ describe('adapter-aws fixtures', () => {
         window,
         onPage: async () => undefined,
       }),
-    ).rejects.toBeInstanceOf(OutOfScopeError);
+    ).rejects.toThrow(/outside the authorised resource scope/);
     expect(ports.calls()).toEqual([]);
   });
 

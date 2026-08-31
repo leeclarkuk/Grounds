@@ -104,12 +104,12 @@ export class DualFixtureAdapter implements ResourceInventoryPort, TelemetryPort 
   ) {
     this.operations = new CountingOperations(new FixtureOperations(loadFixtureScenario(scenario)));
   }
-  public collectInventory(context: CollectContext) {
+  public async collectInventory(context: CollectContext) {
     splitEcsResourceId(context.scope.resourceId);
     assertApprovedScope(context.scope, this.allowedScope);
     return collectInventory(this.operations, context);
   }
-  public collectTelemetry(context: CollectContext) {
+  public async collectTelemetry(context: CollectContext) {
     splitEcsResourceId(context.scope.resourceId);
     assertApprovedScope(context.scope, this.allowedScope);
     return collectTelemetry(this.operations, context);

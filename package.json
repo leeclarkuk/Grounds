@@ -26,6 +26,7 @@
     "@grounds/adapter-aws": "workspace:*",
     "@grounds/api": "workspace:*",
     "@grounds/application": "workspace:*",
+    "@grounds/detectors-ecs": "workspace:*",
     "@grounds/domain": "workspace:*",
     "@grounds/persistence-postgres": "workspace:*",
     "@grounds/test-support": "workspace:*",

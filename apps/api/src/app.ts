@@ -8,6 +8,7 @@ import {
   GrantNotConsumableError,
   IdempotencyConflictError,
   NotFoundError,
+  UniqueConstraintError,
   ValidationError,
   type IdentityProvider,
   type OrchestrationStore,
@@ -106,6 +107,9 @@ function requiredString(value: unknown, field: string): string {
 }
 
 function mapError(error: unknown, reply: FastifyReply): ReturnType<FastifyReply['send']> {
+  if (error instanceof UniqueConstraintError) {
+    return problem(reply, 409, 'Conflict', 'idempotency key reused with a different request');
+  }
   if (error instanceof IdempotencyConflictError) {
     return problem(reply, 409, 'Conflict', 'idempotency key reused with a different request');
   }

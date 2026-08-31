@@ -40,7 +40,7 @@ describe('live AWS bootstrap', () => {
         window,
         onPage: async () => undefined,
       }),
-    ).rejects.toBeInstanceOf(OutOfScopeError);
+    ).rejects.toThrow(/outside the authorised resource scope/);
     expect(bootstrapped).toBe(0);
     expect(ports.bundle.calls).toEqual([]);
   });

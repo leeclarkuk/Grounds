@@ -499,6 +499,7 @@ class PostgresTx implements OrchestrationTx {
          (SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE aggregate_type = $1 AND aggregate_id = $2),
          $3, $4, $5::jsonb, $6
        )
+       ON CONFLICT (aggregate_type, aggregate_id, type, operation_id) DO NOTHING
        RETURNING sequence`,
       [
         event.aggregateType,
@@ -510,11 +511,18 @@ class PostgresTx implements OrchestrationTx {
         randomUUID(),
       ],
     );
-    const sequence = inserted.rows[0]?.sequence;
-    if (!sequence) {
+    if (inserted.rows[0]?.sequence) {
+      return { inserted: true, sequence: Number(inserted.rows[0].sequence) };
+    }
+    const replay = await this.client.query<{ sequence: string }>(
+      `SELECT sequence FROM events
+       WHERE aggregate_type = $1 AND aggregate_id = $2 AND type = $3 AND operation_id = $4`,
+      [event.aggregateType, event.aggregateId, event.type, event.operationId],
+    );
+    if (!replay.rows[0]) {
       throw new Error('event insert failed');
     }
-    return { inserted: true, sequence: Number(sequence) };
+    return { inserted: false, sequence: Number(replay.rows[0].sequence) };
   }
 
   public async claimWork(
@@ -940,6 +948,9 @@ class PostgresTx implements OrchestrationTx {
 
   public async cancelCollect(runId: string): Promise<AssuranceRun> {
     const run = await this.lockRun(runId);
+    if (run.state === 'cancelled') {
+      return run;
+    }
     if (run.state !== 'queued' && run.state !== 'collecting') {
       throw new Error('run is not cancellable');
     }
@@ -1092,45 +1103,44 @@ class PostgresTx implements OrchestrationTx {
     readonly actorId: string;
     readonly record: HttpIdempotencyRecord;
   }): Promise<void> {
-    try {
-      await this.client.query(
-        `INSERT INTO http_idempotency (
+    const inserted = await this.client.query<{ request_digest: string }>(
+      `INSERT INTO http_idempotency (
            id, organisation_id, actor_id, method, route, client_idempotency_key, request_digest,
            response_status, response_body
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
-        [
-          randomUUID(),
-          input.organisationId,
-          input.actorId,
-          input.record.method,
-          input.record.route,
-          input.record.clientIdempotencyKey,
-          input.record.requestDigest,
-          input.record.responseStatus,
-          JSON.stringify(input.record.responseBody),
-        ],
-      );
-    } catch (error) {
-      if (error instanceof DatabaseError && error.code === '23505') {
-        const existing = await this.client.query(
-          `SELECT request_digest FROM http_idempotency
-           WHERE organisation_id = $1 AND actor_id = $2 AND method = $3 AND route = $4 AND client_idempotency_key = $5`,
-          [
-            input.organisationId,
-            input.actorId,
-            input.record.method,
-            input.record.route,
-            input.record.clientIdempotencyKey,
-          ],
-        );
-        const digest = existing.rows[0] ? String(existing.rows[0]['request_digest']) : '';
-        if (digest === input.record.requestDigest) {
-          return;
-        }
-        throw new IdempotencyConflictError();
-      }
-      throw error;
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+       ON CONFLICT (organisation_id, actor_id, method, route, client_idempotency_key) DO NOTHING
+       RETURNING request_digest`,
+      [
+        randomUUID(),
+        input.organisationId,
+        input.actorId,
+        input.record.method,
+        input.record.route,
+        input.record.clientIdempotencyKey,
+        input.record.requestDigest,
+        input.record.responseStatus,
+        JSON.stringify(input.record.responseBody),
+      ],
+    );
+    if (inserted.rows[0]) {
+      return;
     }
+    const existing = await this.client.query<{ request_digest: string }>(
+      `SELECT request_digest FROM http_idempotency
+       WHERE organisation_id = $1 AND actor_id = $2 AND method = $3 AND route = $4 AND client_idempotency_key = $5`,
+      [
+        input.organisationId,
+        input.actorId,
+        input.record.method,
+        input.record.route,
+        input.record.clientIdempotencyKey,
+      ],
+    );
+    const digest = existing.rows[0] ? String(existing.rows[0].request_digest) : '';
+    if (digest === input.record.requestDigest) {
+      return;
+    }
+    throw new IdempotencyConflictError();
   }
 
   public async now(): Promise<string> {

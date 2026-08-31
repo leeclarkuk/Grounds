@@ -20,6 +20,9 @@ importers:
       '@grounds/application':
         specifier: workspace:*
         version: link:packages/application
+      '@grounds/detectors-ecs':
+        specifier: workspace:*
+        version: link:packages/detectors-ecs
       '@grounds/domain':
         specifier: workspace:*
         version: link:packages/domain
