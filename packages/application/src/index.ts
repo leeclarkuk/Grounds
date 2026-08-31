@@ -4,6 +4,12 @@ export { CollectStep, isFenceLost } from './collect-step.js';
 export { CreateAuthorisation } from './create-authorisation.js';
 export { EnqueueRun } from './enqueue-run.js';
 export { EnqueueRunHttp } from './enqueue-run-http.js';
+export {
+  authorisationResponseBody,
+  cancelResponseBody,
+  runWriteResponseBody,
+  storedHttpResponse,
+} from './http-write.js';
 export { EvaluateStep } from './evaluate-step.js';
 export {
   FenceLostError,

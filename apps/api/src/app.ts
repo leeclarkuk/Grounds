@@ -7,9 +7,11 @@ import {
   EnqueueRunHttp,
   GrantNotConsumableError,
   IdempotencyConflictError,
+  InvariantViolationError,
   NotFoundError,
   UniqueConstraintError,
   ValidationError,
+  storedHttpResponse,
   type IdentityProvider,
   type OrchestrationStore,
 } from '@grounds/application';
@@ -119,6 +121,10 @@ function mapError(error: unknown, reply: FastifyReply): ReturnType<FastifyReply[
   if (error instanceof ValidationError || error instanceof GrantNotConsumableError) {
     return problem(reply, 400, 'Bad Request', error.message);
   }
+  if (error instanceof InvariantViolationError) {
+    log('error', 'api invariant violation');
+    return problem(reply, 500, 'Internal Server Error', 'request failed');
+  }
   if (error instanceof z.ZodError) {
     return problem(reply, 400, 'Bad Request', 'request is invalid');
   }
@@ -205,13 +211,7 @@ function registerRoutes(
         },
         clientIdempotencyKey: key,
       });
-      return await reply.code(created.replayed ? 200 : 201).send({
-        id: created.grant.id,
-        profileVersionId: created.grant.profileVersionId,
-        resourceScope: created.grant.resourceScope,
-        evidenceWindow: created.grant.evidenceWindow,
-        expiresAt: created.grant.expiresAt,
-      });
+      return await reply.code(created.status).send(created.body);
     } catch (error) {
       return mapError(error, reply);
     }
@@ -228,13 +228,7 @@ function registerRoutes(
         grantId: requiredString(record['grantId'], 'grantId'),
         clientIdempotencyKey: key,
       });
-      return await reply.code(created.replayed ? 200 : 201).send({
-        id: created.run.id,
-        state: created.run.state,
-        profileVersionId: created.run.profileVersionId,
-        resourceScope: created.run.resourceScope,
-        evidenceWindow: created.run.evidenceWindow,
-      });
+      return await reply.code(created.status).send(created.body);
     } catch (error) {
       return mapError(error, reply);
     }
@@ -291,12 +285,23 @@ function registerRoutes(
       return problem(reply, 400, 'Bad Request', 'id is required');
     }
     try {
-      const run = await new CancelRun(store).execute(parsed.data.id, {
+      await new CancelRun(store).execute(parsed.data.id, {
         organisationId: identity.organisationId(),
         actorId: identity.actorId(),
         clientIdempotencyKey: key,
       });
-      return { id: run.id, state: run.state };
+      const stored = await store.getHttpIdempotency({
+        organisationId: identity.organisationId(),
+        actorId: identity.actorId(),
+        method: 'POST',
+        route: `/v1/runs/${parsed.data.id}/cancel`,
+        clientIdempotencyKey: key,
+      });
+      if (!stored) {
+        throw new InvariantViolationError('cancel idempotency record missing after write');
+      }
+      const response = storedHttpResponse(stored);
+      return await reply.code(response.status).send(response.body);
     } catch (error) {
       return mapError(error, reply);
     }

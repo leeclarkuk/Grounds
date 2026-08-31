@@ -154,6 +154,8 @@ In addition to the Build 1 matrix in the plan and ADR-0005:
 - zero, one and multiple target groups
 - alarm for the same service name in another cluster is not coverage
 - concurrent idempotency on all three HTTP write routes
+- HTTP write replay returns the stored status and body, not live entity state
+- missing or unparsable serviceArn, clusterArn and targetGroupArn are rejected as out of scope
 - worker child-process death after observation insert, restart, no duplicates
 - cancel during pagination: no observation or step commit after cancel
 - observation events contain provenance and never raw payloads

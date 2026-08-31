@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CancelRun, EnqueueRun } from '@grounds/application';
 import type { CollectContext, ResourceInventoryPort, TelemetryPort } from '@grounds/application';
+import { createFixturePorts } from '@grounds/adapter-aws';
 import { GrdEcs001, GrdObs001 } from '@grounds/detectors-ecs';
 import { seedEcsProfileAndGrant, seedProfileAndGrant } from '@grounds/test-support';
 import { WorkerLoop } from '@grounds/worker';
@@ -85,8 +86,8 @@ describe('Build 1 HTTP API', () => {
       payload,
     });
     expect(first.statusCode).toBe(201);
-    expect(second.statusCode).toBe(200);
-    expect((second.json() as { id: string }).id).toBe((first.json() as { id: string }).id);
+    expect(second.statusCode).toBe(201);
+    expect(second.json()).toEqual(first.json());
     const conflict = await app.inject({
       method: 'POST',
       url: '/v1/authorisations',
@@ -126,8 +127,7 @@ describe('Build 1 HTTP API', () => {
       }),
     ]);
     const statuses = auth.map((item) => item.statusCode).sort();
-    expect(statuses[0] === 200 || statuses[0] === 201).toBe(true);
-    expect(statuses[1] === 200 || statuses[1] === 201).toBe(true);
+    expect(statuses).toEqual([201, 201]);
     expect((auth[0]?.json() as { id: string }).id).toBe((auth[1]?.json() as { id: string }).id);
     const grantId = (auth[0]?.json() as { id: string }).id;
     const runKey = randomUUID();
@@ -146,6 +146,8 @@ describe('Build 1 HTTP API', () => {
       }),
     ]);
     expect((runs[0]?.json() as { id: string }).id).toBe((runs[1]?.json() as { id: string }).id);
+    expect(runs.map((item) => item.statusCode).sort()).toEqual([201, 201]);
+    expect(runs[0]?.json()).toEqual(runs[1]?.json());
     const runId = (runs[0]?.json() as { id: string }).id;
     const cancelKey = randomUUID();
     const cancels = await Promise.all([
@@ -161,6 +163,7 @@ describe('Build 1 HTTP API', () => {
       }),
     ]);
     expect(cancels.every((item) => item.statusCode === 200)).toBe(true);
+    expect(cancels[0]?.json()).toEqual(cancels[1]?.json());
     await app.close();
   });
 
@@ -219,5 +222,55 @@ describe('Build 1 HTTP API', () => {
     expect(terminal?.state).toBe('cancelled');
     expect(observations).toHaveLength(0);
     expect(pages).toBeGreaterThanOrEqual(1);
+  });
+
+  it('replays stored enqueue status and body after the run is terminal', async () => {
+    const seeded = await db.store.withTransaction((tx) => seedEcsProfileAndGrant(tx));
+    const { app } = await api();
+    const from = new Date(Date.now() - 3_600_000).toISOString();
+    const to = new Date().toISOString();
+    const granted = await app.inject({
+      method: 'POST',
+      url: '/v1/authorisations',
+      headers: { 'idempotency-key': randomUUID() },
+      payload: {
+        profileVersionId: seeded.profile.id,
+        resourceScope: seeded.profile.scope,
+        evidenceWindow: { from, to },
+      },
+    });
+    const grantId = (granted.json() as { id: string }).id;
+    const runKey = randomUUID();
+    const first = await app.inject({
+      method: 'POST',
+      url: '/v1/runs',
+      headers: { 'idempotency-key': runKey },
+      payload: { grantId },
+    });
+    expect(first.statusCode).toBe(201);
+    expect((first.json() as { state: string }).state).toBe('queued');
+    const runId = (first.json() as { id: string }).id;
+    const ports = createFixturePorts('healthy');
+    const worker = new WorkerLoop({
+      store: db.store,
+      inventory: ports.inventory,
+      telemetry: ports.telemetry,
+      workerId: 'http-replay',
+      leaseTtlSeconds: 15,
+      detectors: [new GrdEcs001(), new GrdObs001()],
+    });
+    await worker.runUntilIdle();
+    const live = await app.inject({ method: 'GET', url: `/v1/runs/${runId}` });
+    expect((live.json() as { run: { state: string } }).run.state).toBe('healthy');
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/v1/runs',
+      headers: { 'idempotency-key': runKey },
+      payload: { grantId },
+    });
+    expect(replay.statusCode).toBe(201);
+    expect(replay.json()).toEqual(first.json());
+    expect((replay.json() as { state: string }).state).toBe('queued');
+    await app.close();
   });
 });

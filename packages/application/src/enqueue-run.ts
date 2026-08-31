@@ -7,6 +7,7 @@ import {
   runIdentityDigest,
   windowToJson,
 } from '@grounds/domain';
+import { runWriteResponseBody } from './http-write.js';
 import {
   GrantNotConsumableError,
   IdempotencyConflictError,
@@ -47,7 +48,7 @@ export class EnqueueRun {
               clientIdempotencyKey: command.clientIdempotencyKey,
               requestDigest: command.requestDigest,
               responseStatus: 201,
-              responseBody: { id: existing.id },
+              responseBody: runWriteResponseBody(existing),
             },
           });
         });
@@ -138,7 +139,7 @@ export class EnqueueRun {
               clientIdempotencyKey: command.clientIdempotencyKey,
               requestDigest: command.requestDigest,
               responseStatus: 201,
-              responseBody: { id: inserted.id },
+              responseBody: runWriteResponseBody(inserted),
             },
           });
         }

@@ -21,21 +21,21 @@ The API and browser never receive AWS credentials. Detectors never see AWS SDK t
 
 ## Threats and mitigations
 
-| Threat                                | Mitigation                                                                                                                                   |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Spoofed actor header                  | Development actor is server-configured. Client actor headers are ignored.                                                                    |
-| Grant replay / concurrent reuse       | Single-use consume, unique grant-to-run, expiry checked in SQL against `now()`.                                                              |
-| Cross-scope collection                | Application deny before first provider call. Adapter rejects out-of-scope responses rather than filtering.                                   |
-| Mutator AWS capability                | Exact static command allowlist. Architecture test. Dedicated IAM role, not `ReadOnlyAccess`.                                                 |
-| Credential leakage                    | Worker-only credentials, redaction before log and persist, no credentials in API errors.                                                     |
-| Stale worker writes                   | Lease owner, epoch and expiry checked on every durable write.                                                                                |
-| Cancel ignored                        | Cancel increments collect `lease_epoch` in the same transaction as run cancel.                                                               |
-| Duplicate durable outcomes            | Grant uniqueness, run idempotency key, observation `(run_id, content_identity)`, finding `(run_id, fingerprint)`, event sequence uniqueness. |
-| UNKNOWN hidden as healthy             | Mixed UNKNOWN cannot terminate `healthy`. Truncated or inaccessible required evidence is `UNKNOWN`.                                          |
-| Injection via AWS strings             | Untrusted data. Never concatenated into SQL, shell or policy.                                                                                |
-| Non-development anonymous API         | Process refuses to listen without `GROUNDS_IDENTITY_MODE=development` in this build.                                                         |
-| Deadlock at cancel or claim           | All multi-row transactions lock grant (enqueue only), then run, then collect step, then evaluate step.                                       |
-| Fake detector mistaken for ECS policy | `GRD-FAKE-001` is test-only, pinned on the fixture profile, and must not use Build 1 detector ids.                                           |
+| Threat                                | Mitigation                                                                                                                                                                                            |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Spoofed actor header                  | Development actor is server-configured. Client actor headers are ignored.                                                                                                                             |
+| Grant replay / concurrent reuse       | Single-use consume, unique grant-to-run, expiry checked in SQL against `now()`.                                                                                                                       |
+| Cross-scope collection                | Application deny before first provider call. Adapter rejects out-of-scope responses rather than filtering. Missing or unparsable service, cluster or target-group ARNs are out of scope, not a match. |
+| Mutator AWS capability                | Exact static command allowlist. Architecture test. Dedicated IAM role, not `ReadOnlyAccess`.                                                                                                          |
+| Credential leakage                    | Worker-only credentials, redaction before log and persist, no credentials in API errors.                                                                                                              |
+| Stale worker writes                   | Lease owner, epoch and expiry checked on every durable write.                                                                                                                                         |
+| Cancel ignored                        | Cancel increments collect `lease_epoch` in the same transaction as run cancel.                                                                                                                        |
+| Duplicate durable outcomes            | Grant uniqueness, run idempotency key, observation `(run_id, content_identity)`, finding `(run_id, fingerprint)`, event sequence uniqueness.                                                          |
+| UNKNOWN hidden as healthy             | Mixed UNKNOWN cannot terminate `healthy`. Truncated or inaccessible required evidence is `UNKNOWN`.                                                                                                   |
+| Injection via AWS strings             | Untrusted data. Never concatenated into SQL, shell or policy.                                                                                                                                         |
+| Non-development anonymous API         | Process refuses to listen without `GROUNDS_IDENTITY_MODE=development` in this build.                                                                                                                  |
+| Deadlock at cancel or claim           | All multi-row transactions lock grant (enqueue only), then run, then collect step, then evaluate step.                                                                                                |
+| Fake detector mistaken for ECS policy | `GRD-FAKE-001` is test-only, pinned on the fixture profile, and must not use Build 1 detector ids.                                                                                                    |
 
 ## Residual risk
 

@@ -1,5 +1,6 @@
 import { sha256Canonical } from '@grounds/domain';
 import { IdempotencyConflictError, NotFoundError } from './errors.js';
+import { cancelResponseBody } from './http-write.js';
 import type { OrchestrationStore, OrchestrationTx } from './store.js';
 import type { AssuranceRun } from './types.js';
 
@@ -56,7 +57,7 @@ export class CancelRun {
           clientIdempotencyKey: http.clientIdempotencyKey,
           requestDigest,
           responseStatus: 200,
-          responseBody: { id: run.id, state: run.state },
+          responseBody: cancelResponseBody(run),
         },
       });
     };

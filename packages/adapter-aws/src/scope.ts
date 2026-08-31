@@ -32,17 +32,26 @@ export function assertCallerAccount(accountId: string, scope: ResourceRef): void
 
 export function assertServiceInScope(scope: ResourceRef, service: JsonObject): void {
   const identity = splitEcsResourceId(scope.resourceId);
-  const arn = readString(service, 'serviceArn', 'ServiceArn');
-  const account = accountFromArn(arn) ?? scope.accountId;
-  const region = regionFromArn(arn) ?? scope.region;
-  const name = readString(service, 'serviceName', 'ServiceName');
+  const serviceArn = readString(service, 'serviceArn', 'ServiceArn');
   const clusterArn = readString(service, 'clusterArn', 'ClusterArn');
+  const name = readString(service, 'serviceName', 'ServiceName');
+  const account = accountFromArn(serviceArn);
+  const region = regionFromArn(serviceArn);
   const clusterName = clusterNameFromArn(clusterArn);
+  const clusterAccount = accountFromArn(clusterArn);
+  const clusterRegion = regionFromArn(clusterArn);
   if (
+    account === undefined ||
+    region === undefined ||
+    clusterName === undefined ||
+    clusterAccount === undefined ||
+    clusterRegion === undefined ||
     account !== scope.accountId ||
     region !== scope.region ||
+    clusterAccount !== scope.accountId ||
+    clusterRegion !== scope.region ||
     name !== identity.serviceName ||
-    (clusterName !== undefined && clusterName !== identity.clusterName)
+    clusterName !== identity.clusterName
   ) {
     throw new OutOfScopeError(scope, scope);
   }
@@ -52,8 +61,10 @@ export function assertTargetGroupInScope(scope: ResourceRef, arn: string): void 
   const account = accountFromArn(arn);
   const region = regionFromArn(arn);
   if (
-    (account !== undefined && account !== scope.accountId) ||
-    (region !== undefined && region !== scope.region)
+    account === undefined ||
+    region === undefined ||
+    account !== scope.accountId ||
+    region !== scope.region
   ) {
     throw new OutOfScopeError(scope, scope);
   }

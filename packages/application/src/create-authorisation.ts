@@ -6,12 +6,12 @@ import {
   assertDetectorPinSet,
   assertHistoricalEvidenceWindow,
   assertInScope,
-  isJsonObject,
   parseEvidenceWindow,
   parseResourceRef,
   resourceScopeDigest,
   sha256Canonical,
   splitEcsResourceId,
+  type JsonObject,
   type ResourceRef,
 } from '@grounds/domain';
 import {
@@ -20,6 +20,7 @@ import {
   UniqueConstraintError,
   ValidationError,
 } from './errors.js';
+import { authorisationResponseBody, storedHttpResponse } from './http-write.js';
 import type { IdentityProvider } from './ports.js';
 import type { HttpIdempotencyRecord, OrchestrationStore } from './store.js';
 import type { Grant } from './types.js';
@@ -31,16 +32,20 @@ export type CreateAuthorisationCommand = {
   readonly clientIdempotencyKey: string;
 };
 
+export type CreateAuthorisationResult = {
+  readonly grant: Grant;
+  readonly replayed: boolean;
+  readonly status: number;
+  readonly body: JsonObject;
+};
+
 export class CreateAuthorisation {
   public constructor(
     private readonly store: OrchestrationStore,
     private readonly identity: IdentityProvider,
   ) {}
 
-  public async execute(command: CreateAuthorisationCommand): Promise<{
-    readonly grant: Grant;
-    readonly replayed: boolean;
-  }> {
+  public async execute(command: CreateAuthorisationCommand): Promise<CreateAuthorisationResult> {
     const actorId = this.identity.actorId();
     const organisationId = this.identity.organisationId();
     const resourceScope = parseResourceRef(command.resourceScope);
@@ -62,12 +67,7 @@ export class CreateAuthorisation {
       if (existing.requestDigest !== requestDigest) {
         throw new IdempotencyConflictError();
       }
-      const grantId = grantIdFromBody(existing);
-      const grant = grantId ? await this.store.getGrant(grantId) : undefined;
-      if (!grant) {
-        throw new NotFoundError('authorisation grant not found');
-      }
-      return { grant, replayed: true };
+      return replayAuthorisation(existing, await grantFromStored(this.store, existing));
     }
     const now = await this.store.now();
     try {
@@ -109,18 +109,20 @@ export class CreateAuthorisation {
           payload: { grantId: inserted.id, ttlSeconds: GRANT_TTL_SECONDS },
           actorId,
         });
+        const body = authorisationResponseBody(inserted);
         const record: HttpIdempotencyRecord = {
           method: 'POST',
           route: '/v1/authorisations',
           clientIdempotencyKey: command.clientIdempotencyKey,
           requestDigest,
           responseStatus: 201,
-          responseBody: { id: inserted.id },
+          responseBody: body,
         };
         await tx.putHttpIdempotency({ organisationId, actorId, record });
         return inserted;
       });
-      return { grant, replayed: false };
+      const body = authorisationResponseBody(grant);
+      return { grant, replayed: false, status: 201, body };
     } catch (error) {
       if (error instanceof UniqueConstraintError || error instanceof IdempotencyConflictError) {
         const replay = await this.store.getHttpIdempotency({
@@ -131,11 +133,7 @@ export class CreateAuthorisation {
           clientIdempotencyKey: command.clientIdempotencyKey,
         });
         if (replay && replay.requestDigest === requestDigest) {
-          const grantId = grantIdFromBody(replay);
-          const grant = grantId ? await this.store.getGrant(grantId) : undefined;
-          if (grant) {
-            return { grant, replayed: true };
-          }
+          return replayAuthorisation(replay, await grantFromStored(this.store, replay));
         }
         throw new IdempotencyConflictError();
       }
@@ -145,10 +143,27 @@ export class CreateAuthorisation {
 }
 
 function grantIdFromBody(record: HttpIdempotencyRecord): string | undefined {
-  const body = record.responseBody;
-  if (!isJsonObject(body)) {
-    return undefined;
-  }
-  const id = body['id'];
+  const stored = storedHttpResponse(record);
+  const id = stored.body['id'];
   return typeof id === 'string' ? id : undefined;
+}
+
+async function grantFromStored(
+  store: OrchestrationStore,
+  record: HttpIdempotencyRecord,
+): Promise<Grant> {
+  const grantId = grantIdFromBody(record);
+  const grant = grantId ? await store.getGrant(grantId) : undefined;
+  if (!grant) {
+    throw new NotFoundError('authorisation grant not found');
+  }
+  return grant;
+}
+
+function replayAuthorisation(
+  record: HttpIdempotencyRecord,
+  grant: Grant,
+): CreateAuthorisationResult {
+  const stored = storedHttpResponse(record);
+  return { grant, replayed: true, status: stored.status, body: stored.body };
 }
