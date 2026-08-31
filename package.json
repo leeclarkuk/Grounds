@@ -1,0 +1,36 @@
+{
+  "name": "grounds",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.3",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "format:check": "prettier --check .",
+    "format": "prettier --write .",
+    "typecheck": "tsc -b --pretty false",
+    "lint": "eslint .",
+    "test": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "build": "tsc -b --pretty false",
+    "verify": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm test && pnpm test:integration && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@grounds/api": "workspace:*",
+    "@grounds/application": "workspace:*",
+    "@grounds/domain": "workspace:*",
+    "@grounds/persistence-postgres": "workspace:*",
+    "@grounds/test-support": "workspace:*",
+    "@grounds/worker": "workspace:*",
+    "@testcontainers/postgresql": "11.7.2",
+    "@types/node": "24.10.1",
+    "eslint": "10.9.1",
+    "eslint-config-prettier": "10.1.8",
+    "prettier": "3.9.6",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.68.0",
+    "vitest": "4.1.11"
+  }
+}

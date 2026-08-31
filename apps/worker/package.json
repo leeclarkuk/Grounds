@@ -1,0 +1,26 @@
+{
+  "name": "@grounds/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@grounds/application": "workspace:*",
+    "@grounds/observability": "workspace:*",
+    "@grounds/persistence-postgres": "workspace:*",
+    "@grounds/test-support": "workspace:*",
+    "zod": "4.1.12"
+  }
+}
