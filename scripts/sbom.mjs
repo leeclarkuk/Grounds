@@ -4,19 +4,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const lock = JSON.parse(readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8'));
-const packages = [];
-const walk = (value, path = []) => {
-  if (value && typeof value === 'object') {
-    if ('version' in value && typeof value.version === 'string' && path.length > 0) {
-      packages.push({ name: path[path.length - 1], version: value.version });
-    }
-    for (const [key, nested] of Object.entries(value)) {
-      walk(nested, [...path, key]);
-    }
-  }
-};
-walk(lock);
+const lockText = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8');
+const packages = packagesFromLockfile(lockText);
 const unique = [
   ...new Map(packages.map((item) => [`${item.name}@${item.version}`, item])).values(),
 ];
@@ -37,3 +26,27 @@ writeFileSync(join(root, 'dist/sbom.json'), json);
 const digest = createHash('sha256').update(json).digest('hex');
 writeFileSync(join(root, 'dist/sbom.sha256'), `${digest}  sbom.json\n`);
 process.stdout.write(`sbom ${String(unique.length)} components ${digest}\n`);
+
+function packagesFromLockfile(text) {
+  const found = [];
+  let inPackages = false;
+  for (const line of text.split('\n')) {
+    if (line === 'packages:') {
+      inPackages = true;
+      continue;
+    }
+    if (inPackages && /^[^\s]/.test(line)) {
+      break;
+    }
+    if (!inPackages) {
+      continue;
+    }
+    const match = /^ {2}(?:'|")?(@?[^@'":\s]+)@([^'":\s]+)(?:'|")?:$/.exec(line);
+    const name = match?.[1];
+    const version = match?.[2];
+    if (name && version) {
+      found.push({ name, version });
+    }
+  }
+  return found;
+}
