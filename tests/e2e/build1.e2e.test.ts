@@ -5,7 +5,7 @@ import { CancelRun, EnqueueRun } from '@grounds/application';
 import type { CollectContext } from '@grounds/application';
 import { createFixturePorts, createLivePorts } from '@grounds/adapter-aws';
 import { GrdEcs001, GrdObs001 } from '@grounds/detectors-ecs';
-import { CW_RUNNING_TASK_METRIC_KIND, OutOfScopeError } from '@grounds/domain';
+import { CW_RUNNING_TASK_METRIC_KIND } from '@grounds/domain';
 import { PAYMENTS_SERVICE, seedEcsProfileAndGrant } from '@grounds/test-support';
 import { WorkerLoop } from '@grounds/worker';
 import { isSchemaReady, migrateUp } from '@grounds/persistence-postgres';

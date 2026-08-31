@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ALARM_PAGE_BOUND, OutOfScopeError, requestDigest } from '@grounds/domain';
+import { ALARM_PAGE_BOUND, requestDigest } from '@grounds/domain';
 import { PAYMENTS_SERVICE } from '../../packages/test-support/src/fixtures.js';
 import { createFixturePorts } from '../../packages/adapter-aws/src/adapter.js';
 import { collectInventory, collectTelemetry } from '../../packages/adapter-aws/src/collectors.js';

@@ -1136,7 +1136,7 @@ class PostgresTx implements OrchestrationTx {
         input.record.clientIdempotencyKey,
       ],
     );
-    const digest = existing.rows[0] ? String(existing.rows[0].request_digest) : '';
+    const digest = existing.rows[0]?.request_digest ?? '';
     if (digest === input.record.requestDigest) {
       return;
     }
