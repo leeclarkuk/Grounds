@@ -118,6 +118,9 @@ importers:
       '@grounds/detectors-ecs':
         specifier: workspace:*
         version: link:../../packages/detectors-ecs
+      '@grounds/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@grounds/observability':
         specifier: workspace:*
         version: link:../../packages/observability
