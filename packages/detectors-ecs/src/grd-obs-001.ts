@@ -48,7 +48,6 @@ export class GrdObs001 implements Detector {
           alarm.alarmActions.some((arn) => arn.length > 0) &&
           alarm.namespace === 'AWS/ApplicationELB' &&
           alarm.metricName === 'UnHealthyHostCount' &&
-          uniqueGroup !== undefined &&
           targetGroupDimensionMatches(alarm.dimensions['TargetGroup'], uniqueGroup),
       );
     const runningTaskAlarm =

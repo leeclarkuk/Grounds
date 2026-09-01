@@ -114,8 +114,7 @@ export class GrdEcs001 implements Detector {
     const present = [serviceObs, tasksObs, groupsObs, healthObs, metricObs].filter(
       (item): item is NonNullable<typeof item> => item !== undefined,
     );
-    const cited =
-      result === 'PASS' ? present.filter((item) => !requiredUnusable(item)) : present;
+    const cited = result === 'PASS' ? present.filter((item) => !requiredUnusable(item)) : present;
     const observationIds = (cited.length > 0 ? cited : input.observations).map((item) => item.id);
     if (observationIds.length === 0) {
       throw new Error('GRD-ECS-001 cannot emit a finding without an observation');

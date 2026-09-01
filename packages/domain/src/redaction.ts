@@ -52,8 +52,7 @@ function redactString(value: string): string {
 }
 
 const ACCESS_KEY = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/;
-const PRESIGNED =
-  /(?:X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|X-Amz-SignedHeaders)=/i;
+const PRESIGNED = /(?:X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|X-Amz-SignedHeaders)=/i;
 
 export function payloadDigestOf(redactedPayload: JsonValue): string {
   return sha256Hex(canonicalJson(redactedPayload));

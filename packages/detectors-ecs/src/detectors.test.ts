@@ -231,7 +231,12 @@ describe('GRD-ECS-001', () => {
       1,
       obs(ECS_TASKS_KIND, {
         tasks: [
-          { taskArn: 'arn:task/1', lastStatus: 'RUNNING', desiredStatus: 'RUNNING', stoppedAt: null },
+          {
+            taskArn: 'arn:task/1',
+            lastStatus: 'RUNNING',
+            desiredStatus: 'RUNNING',
+            stoppedAt: null,
+          },
         ],
         complete: false,
       }),
