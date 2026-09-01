@@ -65,6 +65,7 @@ describe('live AWS bootstrap', () => {
     expect(AWS_SESSION_SECONDS).toBe(900);
     expect(source).toContain('DurationSeconds: AWS_SESSION_SECONDS');
     expect(source).not.toContain('DurationSeconds: input.sessionSeconds');
+    expect(source).toContain('Namespace: CW_RUNNING_TASK_NAMESPACE');
   });
 
   it('makes zero STS calls for an unapproved service', async () => {
@@ -137,5 +138,66 @@ describe('live AWS bootstrap', () => {
     ).rejects.toThrow(/outside the authorised resource scope/);
     expect(ports.bundle.calls).toEqual(['assumeRole', 'getCallerIdentity']);
     expect(collectorCalls).toEqual([]);
+  });
+
+  it('retries AssumeRole after a transient bootstrap failure', async () => {
+    let attempts = 0;
+    const ports = createLivePorts(
+      {
+        roleArn: 'arn:aws:iam::123456789012:role/grounds',
+        externalId: 'ext',
+        region: 'eu-west-2',
+        allowedScope: DEFAULT_ALLOWED_SCOPE,
+      },
+      async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error('denied');
+        }
+        return {
+          accessKeyId: 'ASIAEXAMPLE',
+          secretAccessKey: 'secret',
+          sessionToken: 'token',
+          region: 'eu-west-2',
+        };
+      },
+      () => stubOps('123456789012', []),
+    );
+    const first = await ports.bundle.ensure(DEFAULT_ALLOWED_SCOPE);
+    expect(first).toBeUndefined();
+    const second = await ports.bundle.ensure(DEFAULT_ALLOWED_SCOPE);
+    expect(second).toBeDefined();
+    expect(attempts).toBe(2);
+  });
+
+  it('refreshes the cached session after the 900 second lifetime minus skew', async () => {
+    let now = 1_000;
+    let attempts = 0;
+    const ports = createLivePorts(
+      {
+        roleArn: 'arn:aws:iam::123456789012:role/grounds',
+        externalId: 'ext',
+        region: 'eu-west-2',
+        allowedScope: DEFAULT_ALLOWED_SCOPE,
+      },
+      async () => {
+        attempts += 1;
+        return {
+          accessKeyId: 'ASIAEXAMPLE',
+          secretAccessKey: 'secret',
+          sessionToken: 'token',
+          region: 'eu-west-2',
+        };
+      },
+      () => stubOps('123456789012', []),
+      () => now,
+    );
+    await ports.bundle.ensure(DEFAULT_ALLOWED_SCOPE);
+    now += 839_000;
+    await ports.bundle.ensure(DEFAULT_ALLOWED_SCOPE);
+    expect(attempts).toBe(1);
+    now += 2_000;
+    await ports.bundle.ensure(DEFAULT_ALLOWED_SCOPE);
+    expect(attempts).toBe(2);
   });
 });

@@ -48,7 +48,8 @@ export class GrdObs001 implements Detector {
           alarm.alarmActions.some((arn) => arn.length > 0) &&
           alarm.namespace === 'AWS/ApplicationELB' &&
           alarm.metricName === 'UnHealthyHostCount' &&
-          alarm.dimensions['TargetGroup'] === uniqueGroup,
+          uniqueGroup !== undefined &&
+          targetGroupDimensionMatches(alarm.dimensions['TargetGroup'], uniqueGroup),
       );
     const runningTaskAlarm =
       inventoryComplete &&
@@ -56,7 +57,7 @@ export class GrdObs001 implements Detector {
         (alarm) =>
           alarm.actionsEnabled &&
           alarm.alarmActions.some((arn) => arn.length > 0) &&
-          alarm.namespace === 'AWS/ECS' &&
+          alarm.namespace === 'ECS/ContainerInsights' &&
           alarm.metricName === 'RunningTaskCount' &&
           alarm.dimensions['ClusterName'] === identity.clusterName &&
           alarm.dimensions['ServiceName'] === identity.serviceName,
@@ -109,4 +110,27 @@ function explanation(result: DetectorOutput['result']): string {
     return 'GRD-OBS-001 returns UNKNOWN when DescribeAlarms inventory is incomplete, truncated, stale or inaccessible, or when the service target-group set is empty or ambiguous without a covering RunningTaskCount alarm.';
   }
   return 'Alarm inventory is complete and at least one covering alarm has a configured notification action. Delivery to an owner is not evidenced.';
+}
+
+export function targetGroupDimensionMatches(
+  dimensionValue: string | undefined,
+  targetGroupArn: string,
+): boolean {
+  if (dimensionValue === undefined || dimensionValue.length === 0) {
+    return false;
+  }
+  if (dimensionValue === targetGroupArn) {
+    return true;
+  }
+  const suffix = targetGroupResourceSuffix(targetGroupArn);
+  return suffix.length > 0 && dimensionValue === suffix;
+}
+
+function targetGroupResourceSuffix(targetGroupArn: string): string {
+  const parts = targetGroupArn.split(':');
+  if (parts.length < 6) {
+    return '';
+  }
+  const resource = parts.slice(5).join(':');
+  return resource.startsWith('targetgroup/') ? resource : '';
 }

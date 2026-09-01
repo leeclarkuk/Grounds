@@ -56,7 +56,7 @@ Not in CI. Set these on the **worker only**:
 - `GROUNDS_ALLOWED_ACCOUNT_ID`
 - `GROUNDS_ALLOWED_RESOURCE_ID` (`clusterName/serviceName`)
 
-The API and browser never receive AWS credentials. Session duration is 900 seconds. Do not attach `ReadOnlyAccess`. Do not point this at production. Unapproved services make zero provider calls, including AssumeRole.
+The API and browser never receive AWS credentials. Session duration is 900 seconds. The worker refreshes the session before expiry. Do not attach `ReadOnlyAccess`. Do not point this at production. Unapproved services make zero provider calls, including AssumeRole. Live `RunningTaskCount` is read from `ECS/ContainerInsights`.
 
 ## What this build will not do
 

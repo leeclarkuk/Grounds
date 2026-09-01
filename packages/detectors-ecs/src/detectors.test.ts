@@ -221,6 +221,22 @@ describe('GRD-ECS-001', () => {
       }),
     );
     expect(detector.evaluate(input(mismatch)).result).toBe('UNKNOWN');
+    const incompleteTasks = baseObservations();
+    const tasks = incompleteTasks.find((item) => item.kind === ECS_TASKS_KIND);
+    if (!tasks) {
+      throw new Error('missing');
+    }
+    incompleteTasks.splice(
+      incompleteTasks.indexOf(tasks),
+      1,
+      obs(ECS_TASKS_KIND, {
+        tasks: [
+          { taskArn: 'arn:task/1', lastStatus: 'RUNNING', desiredStatus: 'RUNNING', stoppedAt: null },
+        ],
+        complete: false,
+      }),
+    );
+    expect(detector.evaluate(input(incompleteTasks)).result).toBe('UNKNOWN');
   });
 
   it('returns UNKNOWN for zero or multiple target groups', () => {
@@ -270,7 +286,7 @@ describe('GRD-ECS-001', () => {
     expect(first).toBe(second);
   });
 
-  it('does not FAIL from stale metric deficit alone', () => {
+  it('returns UNKNOWN when unhealthy and deficit metrics are unusable', () => {
     const observations = baseObservations();
     const health = observations.find((item) => item.kind === ELB_TARGET_HEALTH_KIND);
     const metric = observations.find((item) => item.kind === CW_RUNNING_TASK_METRIC_KIND);
@@ -286,6 +302,32 @@ describe('GRD-ECS-001', () => {
         complete: true,
       }),
     );
+    observations.splice(
+      observations.indexOf(metric),
+      1,
+      obs(
+        CW_RUNNING_TASK_METRIC_KIND,
+        {
+          datapoints: [
+            { timestamp: '2026-08-31T00:10:00.000Z', value: 0 },
+            { timestamp: '2026-08-31T00:20:00.000Z', value: 0 },
+          ],
+          complete: true,
+        },
+        { freshness: 'STALE' },
+      ),
+    );
+    const finding = detector.evaluate(input(observations));
+    expect(finding.result).toBe('UNKNOWN');
+    expect(finding.observationIds).toContain(metric.id);
+  });
+
+  it('does not FAIL from stale metric deficit when targets are healthy', () => {
+    const observations = baseObservations();
+    const metric = observations.find((item) => item.kind === CW_RUNNING_TASK_METRIC_KIND);
+    if (!metric) {
+      throw new Error('missing');
+    }
     observations.splice(
       observations.indexOf(metric),
       1,
@@ -347,7 +389,7 @@ describe('GRD-OBS-001', () => {
         alarms: [
           {
             alarmName: 'tasks',
-            namespace: 'AWS/ECS',
+            namespace: 'ECS/ContainerInsights',
             metricName: 'RunningTaskCount',
             dimensions: [
               { name: 'ClusterName', value: 'other-cluster' },
@@ -418,7 +460,7 @@ describe('GRD-OBS-001', () => {
         alarms: [
           {
             alarmName: 'tasks',
-            namespace: 'AWS/ECS',
+            namespace: 'ECS/ContainerInsights',
             metricName: 'RunningTaskCount',
             dimensions: [
               { name: 'ClusterName', value: 'payments-cluster' },
@@ -451,5 +493,25 @@ describe('GRD-OBS-001', () => {
       item.kind === ECS_SERVICE_KIND ? { ...item, freshness: 'STALE' as const } : item,
     );
     expect(detector.evaluate(input(staleService)).result).toBe('UNKNOWN');
+  });
+
+  it('matches an ApplicationELB TargetGroup dimension by ARN resource suffix', () => {
+    const observations = baseObservations().filter((item) => item.kind !== CW_ALARMS_KIND);
+    observations.push(
+      obs(CW_ALARMS_KIND, {
+        alarms: [
+          {
+            alarmName: 'unhealthy',
+            namespace: 'AWS/ApplicationELB',
+            metricName: 'UnHealthyHostCount',
+            dimensions: [{ name: 'TargetGroup', value: 'targetgroup/pay/abc' }],
+            actionsEnabled: true,
+            alarmActions: ['arn:aws:sns:eu-west-2:123456789012:ops'],
+          },
+        ],
+        complete: true,
+      }),
+    );
+    expect(detector.evaluate(input(observations)).result).toBe('PASS');
   });
 });

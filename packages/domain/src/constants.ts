@@ -40,9 +40,13 @@ export const STS_ASSUME_ROLE = 'sts.AssumeRole';
 
 export const AWS_ADAPTER = 'adapter-aws';
 export const AWS_SESSION_SECONDS = 900;
+export const AWS_SESSION_REFRESH_SKEW_SECONDS = 60;
 export const GRANT_TTL_SECONDS = 300;
 export const MAX_EVIDENCE_WINDOW_SECONDS = 3600;
 export const ALARM_PAGE_BOUND = 20;
+export const ECS_DESCRIBE_TASKS_BATCH = 100;
+export const CW_RUNNING_TASK_METRIC_NAME = 'RunningTaskCount';
+export const CW_RUNNING_TASK_NAMESPACE = 'ECS/ContainerInsights';
 
 export const DEFAULT_ECS_DETECTOR_PARAMETERS = {
   replacementCountThreshold: 2,

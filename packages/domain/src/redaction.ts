@@ -40,17 +40,20 @@ function isSensitiveKey(key: string): boolean {
 }
 
 function redactString(value: string): string {
-  if (value.startsWith('AKIA') || value.startsWith('ASIA')) {
-    return REDACTED;
-  }
-  if (/BEGIN [A-Z ]*PRIVATE KEY/.test(value)) {
-    return REDACTED;
-  }
-  if (/AWS[A-Za-z0-9/+=]{30,}/.test(value)) {
+  if (
+    ACCESS_KEY.test(value) ||
+    PRESIGNED.test(value) ||
+    /BEGIN [A-Z ]*PRIVATE KEY/.test(value) ||
+    /AWS[A-Za-z0-9/+=]{30,}/.test(value)
+  ) {
     return REDACTED;
   }
   return value;
 }
+
+const ACCESS_KEY = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/;
+const PRESIGNED =
+  /(?:X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|X-Amz-SignedHeaders)=/i;
 
 export function payloadDigestOf(redactedPayload: JsonValue): string {
   return sha256Hex(canonicalJson(redactedPayload));

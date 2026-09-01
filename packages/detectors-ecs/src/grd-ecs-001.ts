@@ -35,19 +35,17 @@ export class GrdEcs001 implements Detector {
     const groupsObs = observationsOfKind(input.observations, ELB_TARGET_GROUP_KIND)[0];
     const healthObs = observationsOfKind(input.observations, ELB_TARGET_HEALTH_KIND)[0];
     const metricObs = observationsOfKind(input.observations, CW_RUNNING_TASK_METRIC_KIND)[0];
-    const cited = [serviceObs, tasksObs, groupsObs, healthObs, metricObs].filter(
-      (item): item is NonNullable<typeof item> => item !== undefined && !requiredUnusable(item),
-    );
-    const observationIds = (cited.length > 0 ? cited : input.observations).map((item) => item.id);
-    if (observationIds.length === 0) {
-      throw new Error('GRD-ECS-001 cannot emit a finding without an observation');
-    }
     const identity = identityFromResource(input.run.resourceScope.resourceId);
     const service = serviceObs ? parseServicePayload(serviceObs.payload) : undefined;
     const tasks = tasksObs ? parseTasksPayload(tasksObs.payload) : undefined;
     const groups = groupsObs ? parseTargetGroupsPayload(groupsObs.payload) : undefined;
     const health = healthObs ? parseTargetHealthPayload(healthObs.payload) : undefined;
     const metrics = metricObs ? parseMetricPayload(metricObs.payload) : undefined;
+    const metricUnusable =
+      requiredUnusable(metricObs) ||
+      metrics === undefined ||
+      !metrics.complete ||
+      metrics.datapoints.length === 0;
     const targetGroupArns = [...new Set(service?.targetGroupArns ?? [])].sort();
     const targetGroupSetDigest = sha256Canonical(targetGroupArns);
     const uniqueGroup = targetGroupArns.length === 1 ? targetGroupArns[0] : undefined;
@@ -100,8 +98,7 @@ export class GrdEcs001 implements Detector {
       const snapshotDeficit = service.desiredCount - service.runningCount;
       const snapshotHits = snapshotDeficit >= parameters.runningDeficitThreshold;
       const metricHits =
-        metricObs !== undefined &&
-        !requiredUnusable(metricObs) &&
+        !metricUnusable &&
         sustainedDeficit(metrics, service.desiredCount, parameters.deficitSustainedFraction);
       const replacementHits = replacements >= parameters.replacementCountThreshold;
       const deficitHits = snapshotHits || metricHits;
@@ -109,7 +106,19 @@ export class GrdEcs001 implements Detector {
         result = 'FAIL';
         failClause =
           replacementHits && deficitHits ? 'both' : replacementHits ? 'replacement' : 'deficit';
+      } else if (unhealthy && !replacementHits && !snapshotHits && metricUnusable) {
+        result = 'UNKNOWN';
       }
+    }
+
+    const present = [serviceObs, tasksObs, groupsObs, healthObs, metricObs].filter(
+      (item): item is NonNullable<typeof item> => item !== undefined,
+    );
+    const cited =
+      result === 'PASS' ? present.filter((item) => !requiredUnusable(item)) : present;
+    const observationIds = (cited.length > 0 ? cited : input.observations).map((item) => item.id);
+    if (observationIds.length === 0) {
+      throw new Error('GRD-ECS-001 cannot emit a finding without an observation');
     }
 
     const condition = {
@@ -169,7 +178,7 @@ function explanation(result: DetectorOutput['result']): string {
     return 'The load-balancer health-check contract is failing. The service is attached to the inspected target group, that group reports a health-check failure, and task replacement or a running-task deficit is evidenced in the window.';
   }
   if (result === 'UNKNOWN') {
-    return 'GRD-ECS-001 returns UNKNOWN when required service, task, target-group or target-health evidence is missing, stale, truncated, inaccessible or internally contradictory.';
+    return 'GRD-ECS-001 returns UNKNOWN when required service, task, target-group or target-health evidence is missing, stale, truncated, inaccessible or internally contradictory, or when an unhealthy target is present and RunningTaskCount evidence cannot be used to rule out a sustained deficit.';
   }
   return 'Required ECS evidence is complete and the repeated unhealthy replacement conjunction is false.';
 }

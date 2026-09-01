@@ -31,6 +31,18 @@ describe('redaction and identity', () => {
     expect(digest).not.toContain('wJalr');
   });
 
+  it('redacts access keys and presigned URL parameters embedded in diagnostic strings', () => {
+    const redacted = redactUnknown({
+      message: 'request failed for AKIAIOSFODNN7EXAMPLE',
+      url: 'https://s3.amazonaws.com/bucket/key?X-Amz-Credential=ASIATEMPKEYEXAMPLE12&X-Amz-Signature=abcdef',
+    });
+    const canonical = JSON.stringify(redacted);
+    expect(canonical).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    expect(canonical).not.toContain('X-Amz-Credential');
+    expect(canonical).not.toContain('X-Amz-Signature');
+    expect(canonical).toContain(REDACTED);
+  });
+
   it('organisation id participates in content identity', () => {
     const shared = {
       kind: 'fake.inventory',

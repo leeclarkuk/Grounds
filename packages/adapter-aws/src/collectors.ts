@@ -6,8 +6,11 @@ import {
   CW_DESCRIBE_ALARMS,
   CW_GET_METRIC_DATA,
   CW_RUNNING_TASK_METRIC_KIND,
+  CW_RUNNING_TASK_METRIC_NAME,
+  CW_RUNNING_TASK_NAMESPACE,
   ECS_DESCRIBE_SERVICES,
   ECS_DESCRIBE_TASKS,
+  ECS_DESCRIBE_TASKS_BATCH,
   ECS_SERVICE_KIND,
   ECS_TASKS_KIND,
   ELB_DESCRIBE_TARGET_GROUPS,
@@ -88,24 +91,31 @@ export async function collectInventory(
       } while (taskToken);
     }
     const uniqueTaskArns = [...new Set(taskArns)].sort();
-    const described =
-      uniqueTaskArns.length === 0
-        ? { tasks: [] }
-        : await retryOp(
-            () =>
-              operations.describeTasks({
-                clusterName: identity.clusterName,
-                taskArns: uniqueTaskArns,
-              }),
-            context,
-          );
-    await context.onPage();
+    const describedTasks: JsonObject[] = [];
+    const describedFailures: JsonObject[] = [];
+    if (uniqueTaskArns.length === 0) {
+      await context.onPage();
+    } else {
+      for (const batch of chunks(uniqueTaskArns, ECS_DESCRIBE_TASKS_BATCH)) {
+        const described = await retryOp(
+          () =>
+            operations.describeTasks({
+              clusterName: identity.clusterName,
+              taskArns: batch,
+            }),
+          context,
+        );
+        await context.onPage();
+        describedTasks.push(...objectList(readValue(described, 'tasks', 'Tasks')));
+        describedFailures.push(...objectList(readValue(described, 'failures', 'Failures')));
+      }
+    }
     observations.push(
       observation(
         context,
         ECS_TASKS_KIND,
         ECS_DESCRIBE_TASKS,
-        normaliseTasks(objectList(readValue(described, 'tasks', 'Tasks'))),
+        normaliseTasks(describedTasks, uniqueTaskArns, describedFailures),
         {
           clusterName: identity.clusterName,
           taskArns: uniqueTaskArns,
@@ -287,8 +297,8 @@ export async function collectTelemetry(
         {
           clusterName: identity.clusterName,
           serviceName: identity.serviceName,
-          namespace: 'AWS/ECS',
-          metricName: 'RunningTaskCount',
+          namespace: CW_RUNNING_TASK_NAMESPACE,
+          metricName: CW_RUNNING_TASK_METRIC_NAME,
           window: { from: context.window.from, to: context.window.to },
           cursor: metricToken,
         },
@@ -373,3 +383,11 @@ async function retryOp<T>(operation: () => Promise<T>, context: CollectContext):
 }
 
 export { asObject };
+
+function chunks<T>(items: readonly T[], size: number): T[][] {
+  const batches: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    batches.push(items.slice(index, index + size));
+  }
+  return batches;
+}

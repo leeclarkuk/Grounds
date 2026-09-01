@@ -5,6 +5,8 @@ import type {
   TelemetryPort,
 } from '@grounds/application';
 import {
+  AWS_SESSION_REFRESH_SKEW_SECONDS,
+  AWS_SESSION_SECONDS,
   OutOfScopeError,
   splitEcsResourceId,
   type JsonObject,
@@ -25,17 +27,19 @@ export type AssumeRoleFn = typeof assumeRoleSession;
 export type LiveOperationsFactory = (
   session: AwsSessionCredentials,
 ) => AwsOperations & { getCallerIdentity(): Promise<JsonObject> };
+export type EpochClock = () => number;
 
 export class LiveAwsBundle {
   public calls: string[] = [];
   private operations: AwsOperations | undefined;
-  private failed: boolean = false;
+  private usableUntilMs = 0;
 
   public constructor(
     private readonly config: LiveAwsConfig,
     private readonly bootstrap: AssumeRoleFn = assumeRoleSession,
     private readonly createOperations: LiveOperationsFactory = (session) =>
       new LiveAwsOperations(session),
+    private readonly now: EpochClock = () => Date.now(),
   ) {}
 
   public async ensure(scope: ResourceRef): Promise<AwsOperations | undefined> {
@@ -44,12 +48,11 @@ export class LiveAwsBundle {
     if (!this.config.externalId) {
       throw new Error('external ID is required');
     }
-    if (this.failed) {
-      return undefined;
-    }
-    if (this.operations) {
+    if (this.operations && this.now() < this.usableUntilMs) {
       return this.operations;
     }
+    this.operations = undefined;
+    this.usableUntilMs = 0;
     try {
       const session = await this.bootstrap({
         roleArn: this.config.roleArn,
@@ -63,12 +66,13 @@ export class LiveAwsBundle {
       const account = typeof identity['Account'] === 'string' ? identity['Account'] : '';
       assertCallerAccount(account, scope);
       this.operations = new CountingOperations(live);
+      this.usableUntilMs =
+        this.now() + (AWS_SESSION_SECONDS - AWS_SESSION_REFRESH_SKEW_SECONDS) * 1000;
       return this.operations;
     } catch (error) {
       if (error instanceof OutOfScopeError) {
         throw error;
       }
-      this.failed = true;
       return undefined;
     }
   }
@@ -100,6 +104,7 @@ export function createLivePorts(
   config: LiveAwsConfig,
   bootstrap: AssumeRoleFn = assumeRoleSession,
   createOperations?: LiveOperationsFactory,
+  now: EpochClock = () => Date.now(),
 ): {
   readonly inventory: ResourceInventoryPort;
   readonly telemetry: TelemetryPort;
@@ -109,6 +114,7 @@ export function createLivePorts(
     config,
     bootstrap,
     createOperations ?? ((session) => new LiveAwsOperations(session)),
+    now,
   );
   return {
     inventory: new LiveInventory(bundle),
