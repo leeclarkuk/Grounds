@@ -44,11 +44,12 @@ AssumeRole sessions remain 900 seconds with a required external ID. The worker c
 ## Tests required
 
 - Embedded access keys and presigned URL parameters are redacted.
-- Unhealthy + below-threshold replacement/snapshot + stale metric: `UNKNOWN`. Healthy + stale metric: `PASS`.
-- DescribeTasks failures or missing ARNs: `complete: false`.
+- Unhealthy + below-threshold replacement/snapshot + stale, missing, inaccessible, incomplete, unparsable or empty `RunningTaskCount`: `UNKNOWN`. Healthy + stale metric: `PASS`.
+- DescribeTasks failures or missing ARNs, including PascalCase `Failures`: `complete: false`.
+- GRD-ECS-001 `UNKNOWN` when task inventory is incomplete even if running count matches described RUNNING tasks.
 - DescribeTasks batches of at most 100 ARNs.
-- GRD-OBS-001 PASS on `targetgroup/name/id` and on a Container Insights `RunningTaskCount` alarm.
-- Live operations query `ECS/ContainerInsights`. Session refresh after 840 seconds. Transient AssumeRole failure is retryable.
+- GRD-OBS-001 PASS on `targetgroup/name/id`. FAIL on an unrelated suffix. FAIL when the only covering alarm is `AWS/ECS` `RunningTaskCount`. PASS on `ECS/ContainerInsights` `RunningTaskCount`.
+- Live operations query `ECS/ContainerInsights` (constant and source, not `AWS/ECS`). Session refresh after 840 seconds. Transient AssumeRole failure is retryable.
 
 ## Consequences
 

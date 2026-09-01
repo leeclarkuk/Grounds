@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { normaliseTasks } from './normalise.js';
+import { normaliseMetrics, normaliseTasks } from './normalise.js';
 
 describe('normaliseTasks', () => {
   it('is complete when every requested ARN is described and there are no failures', () => {
@@ -28,5 +28,14 @@ describe('normaliseTasks', () => {
       [],
     );
     expect(payload['complete']).toBe(false);
+  });
+});
+
+describe('normaliseMetrics', () => {
+  it('labels RunningTaskCount as ECS/ContainerInsights', () => {
+    expect(normaliseMetrics([], true)).toMatchObject({
+      metricName: 'RunningTaskCount',
+      namespace: 'ECS/ContainerInsights',
+    });
   });
 });

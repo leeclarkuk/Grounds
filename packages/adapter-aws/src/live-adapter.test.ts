@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-import { AWS_SESSION_SECONDS, type JsonObject } from '@grounds/domain';
+import { AWS_SESSION_SECONDS, CW_RUNNING_TASK_NAMESPACE, type JsonObject } from '@grounds/domain';
 import { createLivePorts } from './live-adapter.js';
 import { assumeRoleSession } from './live-operations.js';
 import type { AwsOperations } from './operations.js';
@@ -63,9 +63,11 @@ describe('live AWS bootstrap', () => {
   it('pins AssumeRole session duration to 900 seconds', () => {
     const source = readFileSync(new URL('./live-operations.ts', import.meta.url), 'utf8');
     expect(AWS_SESSION_SECONDS).toBe(900);
+    expect(CW_RUNNING_TASK_NAMESPACE).toBe('ECS/ContainerInsights');
     expect(source).toContain('DurationSeconds: AWS_SESSION_SECONDS');
     expect(source).not.toContain('DurationSeconds: input.sessionSeconds');
     expect(source).toContain('Namespace: CW_RUNNING_TASK_NAMESPACE');
+    expect(source).not.toContain("Namespace: 'AWS/ECS'");
   });
 
   it('makes zero STS calls for an unapproved service', async () => {
