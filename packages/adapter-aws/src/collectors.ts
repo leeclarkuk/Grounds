@@ -20,6 +20,8 @@ import {
   REQUIRED_INVENTORY_KINDS,
   REQUIRED_TELEMETRY_KINDS,
   OutOfScopeError,
+  asJsonObject,
+  redactJson,
   requestDigest,
   splitEcsResourceId,
   type InaccessibleErrorCode,
@@ -322,10 +324,11 @@ function observation(
   query: JsonObject,
   observedAt?: string,
 ): CollectorObservation {
+  const redacted = asJsonObject(redactJson(payload));
   return {
     kind,
-    payload,
-    inaccessible: payload['inaccessible'] === true,
+    payload: redacted,
+    inaccessible: redacted['inaccessible'] === true,
     operation,
     adapter: AWS_ADAPTER,
     requestDigest: requestDigest({

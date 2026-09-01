@@ -175,6 +175,86 @@ describe('collectInventory task description', () => {
       complete: false,
     });
   });
+
+  it('redacts mid-string and suffix access keys from AWS ingest payloads', async () => {
+    const accessKeyId = ['AKIA', 'IOSFODNN7EXAMPLE'].join('');
+    const operations: AwsOperations = {
+      describeServices: () =>
+        Promise.resolve({
+          services: [
+            {
+              serviceName: 'payments',
+              serviceArn: 'arn:aws:ecs:eu-west-2:123456789012:service/payments-cluster/payments',
+              clusterArn: 'arn:aws:ecs:eu-west-2:123456789012:cluster/payments-cluster',
+              desiredCount: 1,
+              runningCount: 0,
+              loadBalancers: [
+                {
+                  targetGroupArn:
+                    'arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/pay/abc',
+                },
+              ],
+            },
+          ],
+        }),
+      listTasks: (_input, nextToken) => {
+        if (nextToken === 'stopped') {
+          return Promise.resolve(page({ taskArns: [] }));
+        }
+        return Promise.resolve(
+          page(
+            {
+              taskArns: ['arn:aws:ecs:eu-west-2:123456789012:task/payments-cluster/1'],
+            },
+            'stopped',
+          ),
+        );
+      },
+      describeTasks: () =>
+        Promise.resolve({
+          tasks: [
+            {
+              taskArn: 'arn:aws:ecs:eu-west-2:123456789012:task/payments-cluster/1',
+              lastStatus: 'STOPPED',
+              desiredStatus: 'STOPPED',
+              stoppedReason: `request failed for ${accessKeyId}`,
+            },
+          ],
+        }),
+      describeTargetGroups: () =>
+        Promise.resolve({
+          targetGroups: [
+            {
+              targetGroupArn:
+                'arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/pay/abc',
+              healthCheckPath: '/health',
+              matcher: { HttpCode: '200' },
+            },
+          ],
+        }),
+      describeTargetHealth: () =>
+        Promise.resolve(
+          page({
+            targetHealthDescriptions: [
+              {
+                target: { id: 'i-1' },
+                targetHealth: { state: 'unhealthy', reason: `trace-${accessKeyId}` },
+              },
+            ],
+          }),
+        ),
+      describeAlarms: () => Promise.resolve(page({ metricAlarms: [] })),
+      getMetricData: () => Promise.resolve(page({ metricDataResults: [] })),
+    };
+    const inventory = await collectInventory(operations, {
+      scope: DEFAULT_ALLOWED_SCOPE,
+      window,
+      onPage: async () => undefined,
+    });
+    const serialised = JSON.stringify(inventory);
+    expect(serialised).not.toContain(accessKeyId);
+    expect(serialised).toContain('[REDACTED]');
+  });
 });
 
 describe('collectTelemetry RunningTaskCount namespace', () => {

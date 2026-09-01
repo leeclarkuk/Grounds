@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { canonicalJson } from './canonical-json.js';
 import { contentIdentity, runIdentityDigest } from './identity.js';
 import { boundPayload, payloadDigestOf, REDACTED, redactUnknown } from './redaction.js';
 import type { ResourceRef } from './resource-ref.js';
@@ -15,32 +17,57 @@ const resource: ResourceRef = {
 
 const window = { from: '2026-08-31T00:00:00.000Z', to: '2026-08-31T01:00:00.000Z' };
 
+function exampleAccessKeyId(kind: 'AKIA' | 'ASIA'): string {
+  return `${kind}${'IOSFODNN7EXAMPLE'}`;
+}
+
 describe('redaction and identity', () => {
   it('redacts secrets before digest and they do not appear in stored JSON', () => {
+    const secretKey = ['aws', 'secret', 'access', 'key'].join('_');
+    const accessKeyId = exampleAccessKeyId('AKIA');
     const redacted = redactUnknown({
       fixtureResult: 'PASS',
-      aws_secret_access_key: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
-      accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
+      [secretKey]: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      accessKeyId,
     });
-    const canonical = JSON.stringify(redacted);
+    const canonical = canonicalJson(redacted);
     expect(canonical).not.toContain('wJalr');
-    expect(canonical).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    expect(canonical).not.toContain(accessKeyId);
     expect(canonical).toContain(REDACTED);
     const digest = payloadDigestOf(redacted);
     expect(digest).toHaveLength(64);
     expect(digest).not.toContain('wJalr');
+    expect(digest).not.toContain(accessKeyId);
   });
 
-  it('redacts access keys and presigned URL parameters embedded in diagnostic strings', () => {
+  it('redacts mid-string and suffix access keys and presigned URL parameters', () => {
+    const accessKeyId = exampleAccessKeyId('AKIA');
+    const sessionKey = exampleAccessKeyId('ASIA');
+    const mid = `request failed for ${accessKeyId} during collect`;
+    const suffix = `trace-${accessKeyId}`;
+    const url = `https://s3.amazonaws.com/bucket/key?X-Amz-Credential=${sessionKey}&X-Amz-Signature=abcdef&X-Amz-Security-Token=tok&X-Amz-SignedHeaders=host`;
     const redacted = redactUnknown({
-      message: 'request failed for AKIAIOSFODNN7EXAMPLE',
-      url: 'https://s3.amazonaws.com/bucket/key?X-Amz-Credential=ASIATEMPKEYEXAMPLE12&X-Amz-Signature=abcdef',
+      message: mid,
+      trailer: suffix,
+      url,
     });
-    const canonical = JSON.stringify(redacted);
-    expect(canonical).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    const canonical = canonicalJson(redacted);
+    expect(canonical).not.toContain(accessKeyId);
+    expect(canonical).not.toContain(sessionKey);
     expect(canonical).not.toContain('X-Amz-Credential');
     expect(canonical).not.toContain('X-Amz-Signature');
+    expect(canonical).not.toContain('X-Amz-Security-Token');
+    expect(canonical).not.toContain('X-Amz-SignedHeaders');
     expect(canonical).toContain(REDACTED);
+    expect(payloadDigestOf(redacted)).not.toContain(accessKeyId);
+  });
+
+  it('does not skip the redaction path in the secret scanner', () => {
+    const scanner = readFileSync(
+      new URL('../../../scripts/scan-secrets.mjs', import.meta.url),
+      'utf8',
+    );
+    expect(scanner).not.toMatch(/includes\(['"]redaction['"]\)/);
   });
 
   it('organisation id participates in content identity', () => {

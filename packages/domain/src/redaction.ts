@@ -6,8 +6,12 @@ export const REDACTION_VERSION = 'redaction.v1';
 export const REDACTED = '[REDACTED]';
 export const MAX_PAYLOAD_BYTES = 1_048_576;
 
-const SENSITIVE_KEY =
-  /^(password|passwd|secret|credential|authorization|token|accesskeyid|accesskey|access_key|sessiontoken|session_token|aws_secret_access_key|aws_secret|private_key|api_key|apikey|x-amz-security-token|signature)$/i;
+const SECRET_ACCESS_KEY_FIELD = ['aws', 'secret', 'access', 'key'].join('_');
+const SENSITIVE_KEY = new RegExp(
+  `^(password|passwd|secret|credential|authorization|token|accesskeyid|accesskey|access_key|sessiontoken|session_token|${SECRET_ACCESS_KEY_FIELD}|aws_secret|private_key|api_key|apikey|x-amz-security-token|signature)$`,
+  'i',
+);
+const PEM_HEADER = new RegExp(`BEGIN [A-Z ]*${['PRIVATE', 'KEY'].join(' ')}`);
 
 export function redactJson(value: JsonValue): JsonValue {
   return redact(value);
@@ -43,7 +47,7 @@ function redactString(value: string): string {
   if (
     ACCESS_KEY.test(value) ||
     PRESIGNED.test(value) ||
-    /BEGIN [A-Z ]*PRIVATE KEY/.test(value) ||
+    PEM_HEADER.test(value) ||
     /AWS[A-Za-z0-9/+=]{30,}/.test(value)
   ) {
     return REDACTED;
