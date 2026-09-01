@@ -2,8 +2,8 @@
 
 Status: **ready for Build 0 and Build 1**  
 Builder: **Grok 4.6 High in Cursor**  
-Architecture gate: **GPT-5.6 Sol, read-only**  
-Independent review: **Claude Opus 5, high effort, read-only**  
+Architecture gate: **Composer 2.5, read-only**  
+Independent review: **Composer 2.5, read-only**  
 Working name: **Grounds**  
 Product rule: **No change without grounds.**
 
@@ -536,7 +536,7 @@ Exit gate:
 
 - every Build 1 acceptance test passes;
 - no state-changing AWS command exists in the dependency graph;
-- Opus reviewer returns `PASS` with no Critical or High findings;
+- independent reviewer returns `PASS` with no Critical or High findings;
 - build evidence records exact commands, exit codes and relevant artefact digests.
 
 ### Build 2 — investigation assistance, not yet authorised
@@ -617,8 +617,8 @@ Builds 0 and 1 are done only when:
 - the UI exposes state and evidence without hiding uncertainty;
 - the threat model and operator runbook match the implementation;
 - the architecture subagent has approved the design before code;
-- the Opus subagent has independently inspected code and run tests after code;
-- every Opus Critical/High issue is fixed and re-reviewed; and
+- the independent-reviewer subagent has inspected code and run tests after code;
+- every independent-reviewer Critical/High issue is fixed and re-reviewed; and
 - the builder reports remaining Medium/Low issues without relabelling them as complete.
 
 ## 20. Cursor operating model
@@ -628,8 +628,8 @@ Use one writable builder and two read-only specialists:
 | Role | Cursor model | Writes | Invocation |
 | --- | --- | --- | --- |
 | Builder | Grok 4.6 High | Yes | Main Cursor agent |
-| Architecture gate | `gpt-5.6-sol` | No | Before each milestone |
-| Independent reviewer | `claude-opus-5[effort=high]` | No | After implementation and fixes |
+| Architecture gate | `composer-2.5` | No | Before each milestone |
+| Independent reviewer | `composer-2.5` | No | After implementation and fixes |
 
 Cursor already provides Explore, Bash and Browser subagents. Do not duplicate them. Do not create service-shaped ECS, CloudWatch, Terraform or Kubernetes agents. Add a specialist only when it has a distinct trust boundary or context-isolation need.
 
