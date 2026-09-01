@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/domain" },
+    { "path": "packages/application" },
+    { "path": "packages/observability" },
+    { "path": "packages/persistence-postgres" },
+    { "path": "packages/test-support" },
+    { "path": "packages/detectors-ecs" },
+    { "path": "packages/adapter-aws" },
+    { "path": "apps/api" },
+    { "path": "apps/worker" }
+  ]
+}

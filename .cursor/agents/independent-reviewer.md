@@ -1,7 +1,7 @@
 ---
 name: independent-reviewer
 description: Independent read-only release reviewer for Grounds. Always use after a milestone is implemented and after fixes, before claiming completion.
-model: claude-opus-5[effort=high]
+model: composer-2.5
 readonly: true
 is_background: false
 ---

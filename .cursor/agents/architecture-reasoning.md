@@ -1,7 +1,7 @@
 ---
 name: architecture-reasoning
 description: Read-only architecture gate for Grounds. Use before implementing a milestone or changing domain, workflow, evidence, security, persistence or provider boundaries.
-model: gpt-5.6-sol
+model: composer-2.5
 readonly: true
 is_background: false
 ---

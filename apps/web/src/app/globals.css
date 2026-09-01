@@ -1,0 +1,81 @@
+:root {
+  color: #102a43;
+  background: #f4f7fb;
+  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+}
+body {
+  margin: 0;
+}
+.banner {
+  display: flex;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  background: #102a43;
+  color: #fff;
+}
+.banner a {
+  color: #fff;
+  margin-left: 1rem;
+}
+main {
+  padding: 1.5rem;
+  max-width: 960px;
+}
+.result {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.result-PASS {
+  background: #c6f6d5;
+  color: #1c4532;
+}
+.result-FAIL {
+  background: #fed7d7;
+  color: #742a2a;
+}
+.result-UNKNOWN {
+  background: #faf089;
+  color: #5f370e;
+  border: 2px dashed #d69e2e;
+}
+.result-none {
+  background: #e2e8f0;
+  color: #2d3748;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.5rem;
+  border-bottom: 1px solid #d9e2ec;
+}
+pre {
+  background: #102a43;
+  color: #f0fff4;
+  padding: 0.75rem;
+  overflow: auto;
+}
+.card {
+  background: #fff;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid #d9e2ec;
+}
+form label {
+  display: block;
+  margin: 0.5rem 0;
+}
+button {
+  background: #102a43;
+  color: #fff;
+  border: 0;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}

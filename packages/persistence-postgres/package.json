@@ -1,0 +1,26 @@
+{
+  "name": "@grounds/persistence-postgres",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@grounds/application": "workspace:*",
+    "@grounds/domain": "workspace:*",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "8.15.6"
+  }
+}

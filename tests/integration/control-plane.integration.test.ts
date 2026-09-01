@@ -1,0 +1,892 @@
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import {
+  CancelRun,
+  EnqueueRun,
+  FindingReplayMismatchError,
+  GrantNotConsumableError,
+  HeartbeatLease,
+  IdempotencyConflictError,
+  RetryClaimedStep,
+} from '@grounds/application';
+import {
+  CW_RUNNING_TASK_METRIC_KIND,
+  ECS_SERVICE_KIND,
+  ECS_TASKS_KIND,
+  ERROR_CLASSES,
+  ERROR_MESSAGES,
+  FAKE_INVENTORY_KIND,
+  backoffSeconds,
+  payloadDigestOf,
+  redactUnknown,
+} from '@grounds/domain';
+import {
+  appliedMigrationIds,
+  isSchemaReady,
+  migrateDown,
+  migrateUp,
+} from '@grounds/persistence-postgres';
+import {
+  FakeInventory,
+  FakeTelemetry,
+  OTHER_ORG,
+  PAYMENTS_SERVICE,
+  seedProfileAndGrant,
+  CountingInventory,
+} from '@grounds/test-support';
+import { WorkerLoop } from '@grounds/worker';
+import { buildApi } from '../../apps/api/src/app.js';
+import { startTestDb, stopTestDb, resetDomainTables, type TestDb } from './harness.js';
+
+const OTHER_SERVICE = { ...PAYMENTS_SERVICE, resourceId: 'payments-cluster/other' };
+
+describe('Build 0 control plane', () => {
+  let db: TestDb;
+
+  beforeAll(async () => {
+    db = await startTestDb();
+  }, 120_000);
+
+  afterAll(async () => {
+    await stopTestDb(db);
+  });
+
+  beforeEach(async () => {
+    if (await isSchemaReady(db.pool)) {
+      await resetDomainTables(db.pool);
+    } else {
+      await migrateUp(db.pool);
+    }
+  });
+
+  async function enqueueRun(inventory: FakeInventory = new FakeInventory()) {
+    const seeded = await db.store.withTransaction((tx) => seedProfileAndGrant(tx));
+    const run = await new EnqueueRun(db.store).execute({
+      grantId: seeded.grant.id,
+      clientIdempotencyKey: randomUUID(),
+      requestDigest: randomUUID(),
+    });
+    return { ...seeded, run, inventory };
+  }
+
+  async function runToTerminal(
+    inventory: FakeInventory = new FakeInventory(),
+    telemetry = new FakeTelemetry(),
+  ) {
+    const seeded = await enqueueRun(inventory);
+    const worker = new WorkerLoop({
+      store: db.store,
+      inventory,
+      telemetry,
+      workerId: `worker-${randomUUID()}`,
+      leaseTtlSeconds: 15,
+    });
+    await worker.runUntilIdle();
+    const run = await db.store.getRun(seeded.run.id);
+    if (!run) {
+      throw new Error('run missing');
+    }
+    return { ...seeded, run, inventory, telemetry };
+  }
+
+  it('confirms expected migrations are applied', async () => {
+    expect(await isSchemaReady(db.pool)).toBe(true);
+    expect(await appliedMigrationIds(db.pool)).toEqual([
+      '0001_schema_migrations',
+      '0002_build0_schema',
+      '0003_build1_constraints',
+    ]);
+  });
+
+  it('enqueues one run from a grant and is idempotent on the client key', async () => {
+    const seeded = await db.store.withTransaction((tx) => seedProfileAndGrant(tx));
+    const key = randomUUID();
+    const digest = randomUUID();
+    const enqueue = new EnqueueRun(db.store);
+    const first = await enqueue.execute({
+      grantId: seeded.grant.id,
+      clientIdempotencyKey: key,
+      requestDigest: digest,
+    });
+    const second = await enqueue.execute({
+      grantId: seeded.grant.id,
+      clientIdempotencyKey: key,
+      requestDigest: digest,
+    });
+    expect(second.id).toBe(first.id);
+    await expect(
+      enqueue.execute({
+        grantId: seeded.grant.id,
+        clientIdempotencyKey: key,
+        requestDigest: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(IdempotencyConflictError);
+    expect(first.state).toBe('queued');
+    expect(first.startedAt).toBeNull();
+    expect(first.resourceScope).toEqual(seeded.grant.resourceScope);
+  });
+
+  it('rejects expired and concurrent grant consumption', async () => {
+    const expired = await db.store.withTransaction((tx) =>
+      seedProfileAndGrant(tx, { expiresAt: new Date(Date.now() - 1000).toISOString() }),
+    );
+    await expect(
+      new EnqueueRun(db.store).execute({
+        grantId: expired.grant.id,
+        clientIdempotencyKey: randomUUID(),
+        requestDigest: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(GrantNotConsumableError);
+
+    const live = await db.store.withTransaction((tx) => seedProfileAndGrant(tx));
+    const enqueue = new EnqueueRun(db.store);
+    const results = await Promise.allSettled([
+      enqueue.execute({
+        grantId: live.grant.id,
+        clientIdempotencyKey: randomUUID(),
+        requestDigest: randomUUID(),
+      }),
+      enqueue.execute({
+        grantId: live.grant.id,
+        clientIdempotencyKey: randomUUID(),
+        requestDigest: randomUUID(),
+      }),
+    ]);
+    const ok = results.filter((item) => item.status === 'fulfilled');
+    const failed = results.filter((item) => item.status === 'rejected');
+    expect(ok).toHaveLength(1);
+    expect(failed).toHaveLength(1);
+  });
+
+  it('rolls back grant consume if the run insert never commits', async () => {
+    const seeded = await db.store.withTransaction((tx) => seedProfileAndGrant(tx));
+    await expect(
+      db.store.withTransaction(async (tx) => {
+        await tx.consumeGrant(seeded.grant.id);
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
+    const grant = await db.store.getGrant(seeded.grant.id);
+    expect(grant?.consumedAt).toBeNull();
+    const replay = await new EnqueueRun(db.store).execute({
+      grantId: seeded.grant.id,
+      clientIdempotencyKey: randomUUID(),
+      requestDigest: randomUUID(),
+    });
+    expect(replay.state).toBe('queued');
+  });
+
+  it('rejects run insert and update tampering of grant-bound fields', async () => {
+    const seeded = await db.store.withTransaction((tx) => seedProfileAndGrant(tx));
+    await expect(
+      db.store.withTransaction(async (tx) => {
+        const grant = await tx.consumeGrant(seeded.grant.id);
+        await tx.insertRun({
+          id: randomUUID(),
+          organisationId: grant.organisationId,
+          profileVersionId: grant.profileVersionId,
+          authorisationGrantId: grant.id,
+          resourceScope: OTHER_SERVICE,
+          resourceScopeDigest: grant.resourceScopeDigest,
+          evidenceWindow: grant.evidenceWindow,
+          detectorVersions: grant.detectorVersions,
+          state: 'queued',
+          result: null,
+          clientIdempotencyKey: randomUUID(),
+          requestDigest: randomUUID(),
+          runIdentityDigest: randomUUID(),
+          cancelRequestedAt: null,
+          collectorAttemptCount: 0,
+          createdAt: '',
+          startedAt: null,
+          updatedAt: '',
+          terminalAt: null,
+        });
+      }),
+    ).rejects.toThrow();
+    const live = await db.store.withTransaction((tx) => seedProfileAndGrant(tx));
+    const enqueue = await new EnqueueRun(db.store).execute({
+      grantId: live.grant.id,
+      clientIdempotencyKey: randomUUID(),
+      requestDigest: randomUUID(),
+    });
+    await expect(
+      db.pool.query(`UPDATE assurance_runs SET resource_scope = $1::jsonb WHERE id = $2`, [
+        JSON.stringify(OTHER_SERVICE),
+        enqueue.id,
+      ]),
+    ).rejects.toThrow(/immutable|must equal/);
+    await expect(
+      db.pool.query(`UPDATE assurance_runs SET run_identity_digest = $1 WHERE id = $2`, [
+        'tampered',
+        enqueue.id,
+      ]),
+    ).rejects.toThrow(/immutable/);
+  });
+
+  it('two workers race and only one claims the collect step', async () => {
+    const seeded = await enqueueRun();
+    const queued = await db.pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM assurance_runs`,
+    );
+    expect(Number(queued.rows[0]?.n)).toBe(1);
+    const [a, b] = await Promise.all([
+      db.store.withTransaction((tx) => tx.claimWork('worker-a', 15)),
+      db.store.withTransaction((tx) => tx.claimWork('worker-b', 15)),
+    ]);
+    const claimed = [a, b].filter((item) => item && !item.exhausted);
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]?.run.id).toBe(seeded.run.id);
+    expect(claimed[0]?.step.leaseEpoch).toBe(1);
+    expect(claimed[0]?.run.state).toBe('collecting');
+    expect(claimed[0]?.run.startedAt).not.toBeNull();
+    const again = await db.store.getRun(seeded.run.id);
+    expect(again?.startedAt).toBe(claimed[0]?.run.startedAt);
+  });
+
+  it('recovers an expired lease with a higher epoch and rejects the stale worker', async () => {
+    await enqueueRun();
+    const first = await db.store.withTransaction((tx) => tx.claimWork('stale', 1));
+    if (!first) {
+      throw new Error('expected claim');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const recovered = await db.store.withTransaction((tx) => tx.claimWork('fresh', 15));
+    expect(recovered?.recovered).toBe(true);
+    expect(recovered?.step.leaseEpoch).toBeGreaterThan(first.step.leaseEpoch);
+    expect(recovered?.run.startedAt).toBe(first.run.startedAt);
+    await expect(
+      db.store.withTransaction((tx) =>
+        tx.requireFence({
+          runId: first.run.id,
+          stepId: first.step.id,
+          workerId: 'stale',
+          leaseEpoch: first.step.leaseEpoch,
+          expectedRunStates: ['collecting'],
+        }),
+      ),
+    ).rejects.toThrow(/lease fence/);
+    await expect(
+      db.store.withTransaction(async (tx) => {
+        const fence = await tx.requireFence({
+          runId: first.run.id,
+          stepId: first.step.id,
+          workerId: 'stale',
+          leaseEpoch: first.step.leaseEpoch,
+          expectedRunStates: ['collecting'],
+        });
+        await tx.persistObservation(
+          fence.run,
+          {
+            id: randomUUID(),
+            kind: FAKE_INVENTORY_KIND,
+            payload: { stolen: true },
+            inaccessible: false,
+            operation: 'fake.DescribeInventory',
+            adapter: 'fixture',
+            requestDigest: 'req',
+          },
+          3600,
+        );
+      }),
+    ).rejects.toThrow(/lease fence/);
+  });
+
+  it('does not let evaluate be claimed while collect is ready or leased', async () => {
+    const seeded = await enqueueRun();
+    const evaluate = await db.store.getStep(seeded.run.id, 'evaluate');
+    expect(evaluate?.state).toBe('blocked');
+    const claimed = await db.store.withTransaction((tx) => tx.claimWork('worker-a', 15));
+    expect(claimed?.step.stepType).toBe('collect');
+    const again = await db.store.withTransaction((tx) => tx.claimWork('worker-b', 15));
+    expect(again?.step.stepType === 'evaluate').toBe(false);
+  });
+
+  it('cancels collect so the previous lease cannot commit', async () => {
+    const seeded = await enqueueRun();
+    const claimed = await db.store.withTransaction((tx) => tx.claimWork('doomed', 15));
+    if (!claimed) {
+      throw new Error('expected claim');
+    }
+    const cancelled = await new CancelRun(db.store).execute(seeded.run.id);
+    expect(cancelled.state).toBe('cancelled');
+    await expect(
+      db.store.withTransaction(async (tx) => {
+        const fence = await tx.requireFence({
+          runId: claimed.run.id,
+          stepId: claimed.step.id,
+          workerId: 'doomed',
+          leaseEpoch: claimed.step.leaseEpoch,
+          expectedRunStates: ['collecting'],
+        });
+        await tx.completeCollect(fence, 'doomed', claimed.step.leaseEpoch);
+      }),
+    ).rejects.toThrow(/lease fence/);
+  });
+
+  it('records cancel during evaluate without aborting the in-flight lease', async () => {
+    const finishedCollect = await runToTerminal();
+    expect(['healthy', 'findings']).toContain(finishedCollect.run.state);
+    const seeded = await enqueueRun();
+    const worker = new WorkerLoop({
+      store: db.store,
+      inventory: new FakeInventory(),
+      telemetry: new FakeTelemetry(),
+      workerId: `w-${randomUUID()}`,
+      leaseTtlSeconds: 15,
+    });
+    await worker.runOnce();
+    const evaluating = await db.store.getRun(seeded.run.id);
+    if (evaluating?.state !== 'evaluating') {
+      await worker.runOnce();
+    }
+    const afterCollect = await db.store.getRun(seeded.run.id);
+    if (afterCollect?.state === 'evaluating') {
+      const requested = await new CancelRun(db.store).execute(seeded.run.id);
+      expect(requested.state).toBe('evaluating');
+      expect(requested.cancelRequestedAt).not.toBeNull();
+    }
+    await worker.runUntilIdle();
+    const terminal = await db.store.getRun(seeded.run.id);
+    expect(terminal?.state === 'healthy' || terminal?.state === 'findings').toBe(true);
+  });
+
+  it('replays a crash after observation insert without duplicates', async () => {
+    const seeded = await enqueueRun();
+    const inventory = new FakeInventory();
+    const crashing = new WorkerLoop({
+      store: db.store,
+      inventory,
+      telemetry: new FakeTelemetry(),
+      workerId: 'crasher',
+      leaseTtlSeconds: 1,
+      crashAfterObservations: true,
+    });
+    await expect(crashing.runOnce()).rejects.toThrow(/CrashAfterObservations/);
+    const afterCrash = await db.store.listObservations(seeded.run.id);
+    expect(afterCrash.length).toBeGreaterThanOrEqual(1);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const recovered = new WorkerLoop({
+      store: db.store,
+      inventory,
+      telemetry: new FakeTelemetry(),
+      workerId: 'rescuer',
+      leaseTtlSeconds: 15,
+    });
+    await recovered.runUntilIdle();
+    const run = await db.store.getRun(seeded.run.id);
+    expect(run?.state === 'healthy' || run?.state === 'findings').toBe(true);
+    const observations = await db.store.listObservations(seeded.run.id);
+    expect(observations).toHaveLength(afterCrash.length);
+    const identities = observations.map((item) => item.contentIdentity);
+    expect(new Set(identities).size).toBe(identities.length);
+    const findings = await db.store.listFindings(seeded.run.id);
+    expect(findings).toHaveLength(1);
+    const events = await db.store.listEvents('assurance_run', seeded.run.id);
+    const opIds = events.map((item) => `${item.type}:${item.operationId}`);
+    expect(new Set(opIds).size).toBe(opIds.length);
+    expect(events.map((item) => item.sequence)).toEqual(events.map((_, index) => index + 1));
+    expect(await db.store.outboxLag()).toBe(0);
+  });
+
+  it('returns cited UNKNOWN for inaccessible inventory', async () => {
+    const result = await runToTerminal(new FakeInventory('inaccessible'));
+    expect(result.run.state).toBe('findings');
+    expect(result.run.result).toBe('UNKNOWN');
+    const findings = await db.store.listFindings(result.run.id);
+    expect(findings[0]?.result).toBe('UNKNOWN');
+    expect(findings[0]?.observationIds.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('returns FAIL from GRD-FAKE-001 when the fixture says so', async () => {
+    const result = await runToTerminal(new FakeInventory('fail'));
+    expect(result.run.state).toBe('findings');
+    expect(result.run.result).toBe('FAIL');
+  });
+
+  it('returns cited UNKNOWN when required inventory is truncated', async () => {
+    const result = await runToTerminal(new FakeInventory('huge'));
+    expect(result.run.state).toBe('findings');
+    expect(result.run.result).toBe('UNKNOWN');
+    const observations = await db.store.listObservations(result.run.id);
+    expect(observations.some((item) => item.kind === FAKE_INVENTORY_KIND && item.truncated)).toBe(
+      true,
+    );
+    const findings = await db.store.listFindings(result.run.id);
+    expect(findings[0]?.result).toBe('UNKNOWN');
+    expect(findings[0]?.observationIds.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('heartbeats keep a live lease from being stolen', async () => {
+    await enqueueRun();
+    const claimed = await db.store.withTransaction((tx) => tx.claimWork('keeper', 1));
+    if (!claimed) {
+      throw new Error('expected claim');
+    }
+    const kept = await new HeartbeatLease(db.store).execute(
+      claimed.step.id,
+      'keeper',
+      claimed.step.leaseEpoch,
+      15,
+    );
+    expect(kept).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const stolen = await db.store.withTransaction((tx) => tx.claimWork('thief', 15));
+    expect(stolen).toBeUndefined();
+    const step = await db.store.getStep(claimed.run.id, 'collect');
+    expect(step?.leaseOwner).toBe('keeper');
+    expect(step?.leaseEpoch).toBe(claimed.step.leaseEpoch);
+  });
+
+  it('accepts every closed error_class pair and rejects mixed or secret text', async () => {
+    const seeded = await enqueueRun();
+    for (const errorClass of ERROR_CLASSES) {
+      await db.pool.query(
+        `UPDATE run_steps SET error_class = $1, error_message = $2 WHERE run_id = $3 AND step_type = 'collect'`,
+        [errorClass, ERROR_MESSAGES[errorClass], seeded.run.id],
+      );
+    }
+    await expect(
+      db.pool.query(
+        `UPDATE run_steps SET error_class = 'persist_failure', error_message = 'step attempts exhausted' WHERE run_id = $1`,
+        [seeded.run.id],
+      ),
+    ).rejects.toThrow();
+    await expect(
+      db.pool.query(
+        `UPDATE run_steps SET error_class = 'persist_failure', error_message = 'AKIASECRET' WHERE run_id = $1`,
+        [seeded.run.id],
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('rejects substituting an equivalent unused grant onto a run', async () => {
+    const seeded = await db.store.withTransaction((tx) => seedProfileAndGrant(tx));
+    const run = await new EnqueueRun(db.store).execute({
+      grantId: seeded.grant.id,
+      clientIdempotencyKey: randomUUID(),
+      requestDigest: randomUUID(),
+    });
+    const other = await db.store.withTransaction((tx) =>
+      tx.insertGrant({
+        id: randomUUID(),
+        organisationId: seeded.grant.organisationId,
+        actorId: seeded.grant.actorId,
+        profileVersionId: seeded.grant.profileVersionId,
+        resourceScope: seeded.grant.resourceScope,
+        resourceScopeDigest: seeded.grant.resourceScopeDigest,
+        evidenceWindow: seeded.grant.evidenceWindow,
+        detectorVersions: seeded.grant.detectorVersions,
+        grantedAt: seeded.grant.grantedAt,
+        expiresAt: seeded.grant.expiresAt,
+        consumedAt: null,
+        clientIdempotencyKey: randomUUID(),
+        requestDigest: randomUUID(),
+      }),
+    );
+    await expect(
+      db.pool.query(`UPDATE assurance_runs SET authorisation_grant_id = $1 WHERE id = $2`, [
+        other.id,
+        run.id,
+      ]),
+    ).rejects.toThrow(/immutable/);
+  });
+
+  it('isolates organisations in queries and digests', async () => {
+    const a = await db.store.withTransaction((tx) => seedProfileAndGrant(tx));
+    const b = await db.store.withTransaction((tx) =>
+      seedProfileAndGrant(tx, { organisationId: OTHER_ORG }),
+    );
+    const runA = await new EnqueueRun(db.store).execute({
+      grantId: a.grant.id,
+      clientIdempotencyKey: randomUUID(),
+      requestDigest: randomUUID(),
+    });
+    const runB = await new EnqueueRun(db.store).execute({
+      grantId: b.grant.id,
+      clientIdempotencyKey: randomUUID(),
+      requestDigest: randomUUID(),
+    });
+    expect(runA.organisationId).not.toBe(runB.organisationId);
+    expect(runA.runIdentityDigest).not.toBe(runB.runIdentityDigest);
+    const loaded = await db.store.getRun(runA.id);
+    expect(loaded?.organisationId).toBe(runA.organisationId);
+  });
+
+  it('enforces append-only evidence, citations and closed error messages', async () => {
+    const result = await runToTerminal();
+    const finding = (await db.store.listFindings(result.run.id))[0];
+    const observation = (await db.store.listObservations(result.run.id))[0];
+    if (!finding || !observation) {
+      throw new Error('expected finding');
+    }
+    await expect(
+      db.pool.query(`UPDATE observations SET kind = 'x' WHERE id = $1`, [observation.id]),
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      db.pool.query(`DELETE FROM observations WHERE id = $1`, [observation.id]),
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      db.pool.query(
+        `INSERT INTO finding_citations (finding_id, observation_id, run_id) VALUES ($1,$2,$3)`,
+        [finding.id, observation.id, result.run.id],
+      ),
+    ).rejects.toThrow();
+    await expect(
+      db.pool.query(`UPDATE finding_citations SET run_id = $1 WHERE finding_id = $2`, [
+        result.run.id,
+        finding.id,
+      ]),
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      db.pool.query(
+        `UPDATE run_steps SET error_class = 'persist_failure', error_message = 'AKIASECRET' WHERE run_id = $1`,
+        [result.run.id],
+      ),
+    ).rejects.toThrow();
+    await expect(
+      db.pool.query(
+        `INSERT INTO findings (
+           id, run_id, detector_id, detector_version, profile_version_id, resource, result, severity,
+           title, explanation, fingerprint, citation_count, evaluated_at
+         ) VALUES (
+           $1,$2,'GRD-FAKE-001','1',$3,$4::jsonb,'PASS','INFO','t','e',$5,1,now()
+         )`,
+        [
+          randomUUID(),
+          result.run.id,
+          result.run.profileVersionId,
+          JSON.stringify(PAYMENTS_SERVICE),
+          randomUUID(),
+        ],
+      ),
+    ).rejects.toThrow();
+    expect(ERROR_MESSAGES.persist_failure).toBe('durable persist failed');
+  });
+
+  it('exhausts attempts instead of issuing a sixth lease', async () => {
+    const seeded = await enqueueRun();
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const claimed = await db.store.withTransaction((tx) =>
+        tx.claimWork(`w-${String(attempt)}`, 1),
+      );
+      expect(claimed?.exhausted).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    }
+    const sixth = await db.store.withTransaction((tx) => tx.claimWork('w-5', 1));
+    expect(sixth?.exhausted).toBe(true);
+    const run = await db.store.getRun(seeded.run.id);
+    expect(run?.state).toBe('failed');
+    const step = await db.store.getStep(seeded.run.id, 'collect');
+    expect(step?.attempt).toBe(5);
+    expect(step?.state).toBe('failed');
+  });
+
+  it('makes zero provider calls for an out-of-scope run and fails as invariant_violation', async () => {
+    const inventory = new CountingInventory(new FakeInventory());
+    const seeded = await db.store.withTransaction((tx) =>
+      seedProfileAndGrant(tx, { grantResource: OTHER_SERVICE }),
+    );
+    expect(seeded.profile.scope.resourceId).toBe('payments-cluster/payments');
+    expect(seeded.grant.resourceScope.resourceId).toBe('payments-cluster/other');
+    const run = await new EnqueueRun(db.store).execute({
+      grantId: seeded.grant.id,
+      clientIdempotencyKey: randomUUID(),
+      requestDigest: randomUUID(),
+    });
+    const worker = new WorkerLoop({
+      store: db.store,
+      inventory,
+      telemetry: new FakeTelemetry(),
+      workerId: `scope-${randomUUID()}`,
+      leaseTtlSeconds: 15,
+    });
+    await worker.runUntilIdle();
+    expect(inventory.calls).toBe(0);
+    const terminal = await db.store.getRun(run.id);
+    expect(terminal?.state).toBe('failed');
+    const step = await db.store.getStep(run.id, 'collect');
+    expect(step?.state).toBe('failed');
+    expect(step?.errorClass).toBe('invariant_violation');
+    expect(step?.attempt).toBe(1);
+  });
+
+  it('claims work using PostgreSQL time even if Date.now is skewed', async () => {
+    const seeded = await enqueueRun();
+    const claimed = await db.store.withTransaction((tx) => tx.claimWork('clock-w', 15));
+    if (!claimed) {
+      throw new Error('expected claim');
+    }
+    await new RetryClaimedStep(db.store).execute(claimed, 'clock-w');
+    const originalNow = Date.now;
+    Date.now = () => originalNow() - 60_000;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, backoffSeconds(1) * 1000 + 200));
+      const next = await db.store.withTransaction((tx) => tx.claimWork('clock-retry', 15));
+      expect(next?.step.id).toBe(claimed.step.id);
+      expect(next?.run.id).toBe(seeded.run.id);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  it('retries a claimed step on the same id and honours next_attempt_at', async () => {
+    const seeded = await enqueueRun();
+    const claimed = await db.store.withTransaction((tx) => tx.claimWork('retry-w', 15));
+    if (!claimed) {
+      throw new Error('expected claim');
+    }
+    await new RetryClaimedStep(db.store).execute(claimed, 'retry-w');
+    const delayed = await db.store.getStep(seeded.run.id, 'collect');
+    expect(delayed?.state).toBe('ready');
+    expect(delayed?.attempt).toBe(1);
+    expect(delayed?.leaseOwner).toBeNull();
+    expect(delayed?.leaseExpiresAt).toBeNull();
+    expect(delayed?.nextAttemptAt).not.toBeNull();
+    const tooSoon = await db.store.withTransaction((tx) => tx.claimWork('early', 15));
+    expect(tooSoon).toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, backoffSeconds(1) * 1000 + 200));
+    const [a, b] = await Promise.all([
+      db.store.withTransaction((tx) => tx.claimWork('retry-a', 15)),
+      db.store.withTransaction((tx) => tx.claimWork('retry-b', 15)),
+    ]);
+    const recovered = [a, b].filter((item) => item && !item.exhausted);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]?.step.id).toBe(claimed.step.id);
+    expect(recovered[0]?.step.attempt).toBe(2);
+    expect(recovered[0]?.step.leaseEpoch).toBeGreaterThan(claimed.step.leaseEpoch);
+    expect(recovered[0]?.recovered).toBe(false);
+  });
+
+  it('exposes live and ready endpoints', async () => {
+    const { app } = await buildApi({
+      databaseUrl: db.url,
+      identityMode: 'development',
+      host: '127.0.0.1',
+      port: 0,
+    });
+    const live = await app.inject({ method: 'GET', url: '/health/live' });
+    expect(live.statusCode).toBe(200);
+    const ready = await app.inject({ method: 'GET', url: '/health/ready' });
+    expect(ready.statusCode).toBe(200);
+    const spoofed = await app.inject({
+      method: 'GET',
+      url: '/health/live',
+      headers: { 'x-grounds-actor': 'spoofed' },
+    });
+    expect(spoofed.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('reports not ready before migrations and when postgres is unreachable', async () => {
+    await migrateDown(db.pool);
+    const { app } = await buildApi({
+      databaseUrl: db.url,
+      identityMode: 'development',
+    });
+    const notReady = await app.inject({ method: 'GET', url: '/health/ready' });
+    expect(notReady.statusCode).toBe(503);
+    await app.close();
+    const down = await buildApi({
+      databaseUrl: 'postgres://grounds:grounds@127.0.0.1:1/grounds',
+      identityMode: 'development',
+    });
+    const unavailable = await down.app.inject({ method: 'GET', url: '/health/ready' });
+    expect(unavailable.statusCode).toBe(503);
+    await down.app.close();
+    await migrateUp(db.pool);
+  });
+
+  it('reports not ready after only the migrations ledger is applied', async () => {
+    await migrateDown(db.pool);
+    const ledger = readFileSync(
+      join(process.cwd(), 'migrations/0001_schema_migrations.up.sql'),
+      'utf8',
+    );
+    await db.pool.query(ledger);
+    await db.pool.query(
+      `INSERT INTO schema_migrations (id) VALUES ('0001_schema_migrations') ON CONFLICT DO NOTHING`,
+    );
+    expect(await isSchemaReady(db.pool)).toBe(false);
+    const { app } = await buildApi({
+      databaseUrl: db.url,
+      identityMode: 'development',
+    });
+    const partial = await app.inject({ method: 'GET', url: '/health/ready' });
+    expect(partial.statusCode).toBe(503);
+    await app.close();
+    await migrateUp(db.pool);
+    expect(await isSchemaReady(db.pool)).toBe(true);
+  });
+
+  it('computes freshness at persist against PostgreSQL now', async () => {
+    const seeded = await enqueueRun();
+    const inventory = await db.store.withTransaction(async (tx) =>
+      tx.persistObservation(
+        seeded.run,
+        {
+          id: randomUUID(),
+          kind: ECS_SERVICE_KIND,
+          payload: { complete: true },
+          inaccessible: false,
+          operation: 'ecs.DescribeServices',
+          adapter: 'adapter-aws',
+          requestDigest: 'inventory',
+        },
+        3600,
+      ),
+    );
+    expect(inventory.observation.freshness).toBe('FRESH');
+    const zeroPolicy = await db.store.withTransaction(async (tx) =>
+      tx.persistObservation(
+        seeded.run,
+        {
+          id: randomUUID(),
+          kind: ECS_TASKS_KIND,
+          payload: { complete: true },
+          inaccessible: false,
+          operation: 'ecs.DescribeTasks',
+          adapter: 'adapter-aws',
+          requestDigest: 'tasks-zero',
+        },
+        0,
+      ),
+    );
+    expect(zeroPolicy.observation.freshness).toBe('STALE');
+    const missingMetric = await db.store.withTransaction(async (tx) =>
+      tx.persistObservation(
+        seeded.run,
+        {
+          id: randomUUID(),
+          kind: CW_RUNNING_TASK_METRIC_KIND,
+          payload: { datapoints: [], complete: true },
+          inaccessible: false,
+          operation: 'cloudwatch.GetMetricData',
+          adapter: 'adapter-aws',
+          requestDigest: 'metric-missing',
+        },
+        3600,
+      ),
+    );
+    expect(missingMetric.observation.freshness).toBe('STALE');
+    const staleMetric = await db.store.withTransaction(async (tx) =>
+      tx.persistObservation(
+        seeded.run,
+        {
+          id: randomUUID(),
+          kind: CW_RUNNING_TASK_METRIC_KIND,
+          payload: {
+            datapoints: [{ timestamp: '2020-01-01T00:00:00.000Z', value: 1 }],
+            complete: true,
+          },
+          inaccessible: false,
+          operation: 'cloudwatch.GetMetricData',
+          adapter: 'adapter-aws',
+          requestDigest: 'metric-old',
+          observedAt: '2020-01-01T00:00:00.000Z',
+        },
+        3600,
+      ),
+    );
+    expect(staleMetric.observation.freshness).toBe('STALE');
+  });
+
+  it('rejects conflicting fingerprint replay', async () => {
+    const result = await runToTerminal();
+    const finding = (await db.store.listFindings(result.run.id))[0];
+    if (!finding) {
+      throw new Error('expected finding');
+    }
+    await expect(
+      db.store.withTransaction((tx) =>
+        tx.persistFinding(result.run, {
+          id: randomUUID(),
+          detectorId: finding.detectorId,
+          detectorVersion: finding.detectorVersion,
+          result: finding.result,
+          severity: finding.severity,
+          title: finding.title,
+          explanation: `${finding.explanation} mutated`,
+          fingerprint: finding.fingerprint,
+          observationIds: finding.observationIds,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(FindingReplayMismatchError);
+  });
+
+  it('redacts secrets before observation persist and HTTP read', async () => {
+    const seeded = await enqueueRun();
+    const secretKey = ['aws', 'secret', 'access', 'key'].join('_');
+    const persisted = await db.store.withTransaction(async (tx) =>
+      tx.persistObservation(
+        seeded.run,
+        {
+          id: randomUUID(),
+          kind: FAKE_INVENTORY_KIND,
+          payload: {
+            accessKeyId: 'AKIA-NOT-A-REAL-KEY',
+            [secretKey]: 'example-secret-value',
+            note: 'safe',
+          },
+          inaccessible: false,
+          operation: 'fake.DescribeInventory',
+          adapter: 'fixture',
+          requestDigest: 'redact-test',
+        },
+        3600,
+      ),
+    );
+    expect(JSON.stringify(persisted.observation.payload)).not.toMatch(/AKIA-NOT-A-REAL-KEY/);
+    expect(JSON.stringify(persisted.observation.payload)).not.toMatch(/example-secret-value/);
+    expect(JSON.stringify(persisted.observation.payload)).toMatch(/REDACTED/);
+    const { app } = await buildApi({
+      databaseUrl: db.url,
+      identityMode: 'development',
+    });
+    const detail = await app.inject({ method: 'GET', url: `/v1/runs/${seeded.run.id}` });
+    expect(detail.body).not.toMatch(/AKIA-NOT-A-REAL-KEY/);
+    expect(detail.body).not.toMatch(/example-secret-value/);
+    await app.close();
+  });
+
+  it('redacts mid-string and suffix secrets from stored JSON, events and digest inputs', async () => {
+    const seeded = await enqueueRun();
+    const accessKeyId = ['AKIA', 'IOSFODNN7EXAMPLE'].join('');
+    const mid = `request failed for ${accessKeyId} during collect`;
+    const suffix = `trace-${accessKeyId}`;
+    const raw = { diagnostic: mid, trailer: suffix, note: 'safe' };
+    const persisted = await db.store.withTransaction(async (tx) => {
+      const observation = await tx.persistObservation(
+        seeded.run,
+        {
+          id: randomUUID(),
+          kind: FAKE_INVENTORY_KIND,
+          payload: raw,
+          inaccessible: false,
+          operation: 'fake.DescribeInventory',
+          adapter: 'fixture',
+          requestDigest: 'redact-substring-test',
+        },
+        3600,
+      );
+      await tx.appendEvent({
+        aggregateType: 'assurance_run',
+        aggregateId: seeded.run.id,
+        type: 'diagnostic',
+        operationId: `redact-event:${seeded.run.id}`,
+        payload: { message: mid, trailer: suffix },
+        actorId: null,
+      });
+      return observation;
+    });
+    const stored = JSON.stringify(persisted.observation.payload);
+    expect(stored).not.toContain(accessKeyId);
+    expect(stored).toMatch(/REDACTED/);
+    expect(persisted.observation.payloadDigest).toBe(payloadDigestOf(redactUnknown(raw)));
+    const events = await db.store.listEvents('assurance_run', seeded.run.id);
+    expect(JSON.stringify(events)).not.toContain(accessKeyId);
+  });
+});

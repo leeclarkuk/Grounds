@@ -1,0 +1,17 @@
+dist
+node_modules
+coverage
+pnpm-lock.yaml
+.git
+*.tsbuildinfo
+LICENSE
+Grounds-Build-Ready-Plan.md
+AGENTS.md
+.cursor
+apps/web/.next
+dist/sbom.json
+docs/decisions/0001-evidence.md
+docs/decisions/0002-orchestration.md
+docs/decisions/0003-security.md
+docs/decisions/0004-provider-boundary.md
+docs/decisions/0005-detector-truth-tables.md

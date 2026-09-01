@@ -29,7 +29,7 @@ The main Cursor agent using Grok 4.6 High is the sole writer and owns the build.
 
 - Invoke `/architecture-reasoning` before implementing a milestone or changing domain, workflow, evidence, persistence, security or provider boundaries.
 - Invoke `/independent-reviewer` after implementation and verification, and again after material fixes.
-- Both specialists are read-only. Do not ask them to edit files, commit code or change external state.
+- Both specialists use **Composer 2.5** (configured in `.cursor/agents/`) and are read-only. Do not ask them to edit files, commit code or change external state.
 - Do not create more custom subagents unless a new, distinct trust boundary appears and the user approves it.
 - Use Cursor's built-in Explore, Bash and Browser agents for their intended work instead of duplicating them.
 

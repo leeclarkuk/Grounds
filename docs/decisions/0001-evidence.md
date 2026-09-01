@@ -12,7 +12,7 @@ The build-ready plan requires immutable, time-bounded, content-addressed observa
 
 1. Observations are run-scoped. Uniqueness is `(run_id, content_identity)`. `organisation_id` is stored on the row and included in digest inputs. v0.1 does not reuse observation rows across runs.
 2. `content_identity` is SHA-256 over RFC 8785 canonical JSON of: `organisationId`, `kind`, `resource`, `window`, `source.operation`, `payloadDigest`, `redactionVersion`. Canonicalisation uses RFC 8785 with checked-in test vectors. PostgreSQL `now()` is the clock for `collectedAt`, freshness, grant expiry and leases.
-3. Redact before digest and before persist. Never persist credentials, request signatures, environment variables or unredacted log lines.
+3. Redact before digest and before persist. Never persist credentials, request signatures, environment variables or unredacted log lines. Access-key ids (`AKIA`/`ASIA`) and presigned-URL parameters (`X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`, `X-Amz-SignedHeaders`) match anywhere in a string, not only at position zero. The same rule applies at observation persist, event persist, AWS ingest, logs and errors.
 4. Oversize input is not byte-sliced. If the redacted canonical payload exceeds 1 MiB, persist a bounded envelope `{ "truncated": true, "originalByteLength": n, "fullPayloadDigest": "..." }` and mark the observation truncated. Required truncated evidence yields `UNKNOWN`.
 5. Freshness is `FRESH` or `STALE` against the pinned profile freshness policy. Detectors treat stale required evidence as `UNKNOWN`.
 6. Inaccessible, partial, throttled-out or schema-invalid collector results persist as a normalised failure observation (`inaccessible: true` or equivalent kind) so every finding, including `UNKNOWN` and `PASS`, can cite at least one observation id.
@@ -31,7 +31,8 @@ The build-ready plan requires immutable, time-bounded, content-addressed observa
 ## Tests required
 
 - RFC 8785 vectors and stable SHA-256 digests.
-- Redaction-before-digest: a secret in the raw payload must not appear in payload digest inputs or stored JSON.
+- Redaction-before-digest: a secret in the raw payload, including a mid-string or suffix access-key id, must not appear in payload digest inputs, stored JSON or events.
+- H6-1 logs: mid-string and suffix access-key ids must not appear in `log()` output, including message, fields and closed error detail. A `startsWith`-only or unredacted logger must fail.
 - Bounded envelope for oversize input; required truncated evidence is `UNKNOWN`.
 - Same content in one run inserts once; a second run may insert the same logical content under a different `run_id`.
 - Cross-organisation isolation: organisation id participates in the digest and in queries.
