@@ -54,4 +54,13 @@ describe('log redaction', () => {
     expect(output).toContain('[REDACTED]');
     expect(output).not.toMatch(/Error: request failed for AKIA/);
   });
+
+  it('redacts mid-string secrets from plain-object error detail', () => {
+    const accessKeyId = exampleAccessKeyId('AKIA');
+    const output = capture(process.stderr, () => {
+      log('error', 'adapter failure', {}, { message: `token ${accessKeyId} rejected` });
+    });
+    expect(output).not.toContain(accessKeyId);
+    expect(output).toContain('[REDACTED]');
+  });
 });

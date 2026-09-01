@@ -15,6 +15,7 @@ import {
   type ResourceInventoryPort,
   type TelemetryPort,
 } from '@grounds/application';
+import { resourceScopeDigest } from '@grounds/domain';
 import { log } from '@grounds/observability';
 import { GrdFake001 } from '@grounds/test-support';
 
@@ -69,11 +70,13 @@ export class WorkerLoop {
     );
     try {
       log('info', 'claimed work', {
+        traceId: claimed.run.id,
         runId: claimed.run.id,
         stepId: claimed.step.id,
         attempt: claimed.step.attempt,
         leaseEpoch: claimed.step.leaseEpoch,
         profileVersionId: claimed.run.profileVersionId,
+        resourceFingerprint: resourceScopeDigest(claimed.run.resourceScope),
       });
       if (claimed.step.stepType === 'collect') {
         await new CollectStep(
