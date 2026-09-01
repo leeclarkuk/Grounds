@@ -173,7 +173,11 @@ importers:
         specifier: 24.10.1
         version: 24.10.1
 
-  packages/observability: {}
+  packages/observability:
+    dependencies:
+      '@grounds/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/persistence-postgres:
     dependencies:

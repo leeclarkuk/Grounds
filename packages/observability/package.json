@@ -14,5 +14,8 @@
   ],
   "scripts": {
     "build": "tsc -b"
+  },
+  "dependencies": {
+    "@grounds/domain": "workspace:*"
   }
 }

@@ -507,7 +507,7 @@ class PostgresTx implements OrchestrationTx {
         event.aggregateId,
         event.type,
         event.operationId,
-        JSON.stringify(event.payload),
+        JSON.stringify(redactJson(event.payload)),
         event.actorId,
         randomUUID(),
       ],

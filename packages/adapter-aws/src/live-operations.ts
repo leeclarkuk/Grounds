@@ -5,6 +5,8 @@ import { STSClient } from '@aws-sdk/client-sts';
 
 import {
   AWS_SESSION_SECONDS,
+  CW_RUNNING_TASK_METRIC_NAME,
+  CW_RUNNING_TASK_NAMESPACE,
   assertJsonValue,
   isJsonObject,
   type JsonObject,
@@ -167,8 +169,8 @@ export class LiveAwsOperations implements AwsOperations {
               Id: 'running',
               MetricStat: {
                 Metric: {
-                  Namespace: 'AWS/ECS',
-                  MetricName: 'RunningTaskCount',
+                  Namespace: CW_RUNNING_TASK_NAMESPACE,
+                  MetricName: CW_RUNNING_TASK_METRIC_NAME,
                   Dimensions: [
                     { Name: 'ClusterName', Value: input.clusterName },
                     { Name: 'ServiceName', Value: input.serviceName },

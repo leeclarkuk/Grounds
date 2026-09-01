@@ -122,13 +122,13 @@ function mapError(error: unknown, reply: FastifyReply): ReturnType<FastifyReply[
     return problem(reply, 400, 'Bad Request', error.message);
   }
   if (error instanceof InvariantViolationError) {
-    log('error', 'api invariant violation');
+    log('error', 'api invariant violation', {}, error);
     return problem(reply, 500, 'Internal Server Error', 'request failed');
   }
   if (error instanceof z.ZodError) {
     return problem(reply, 400, 'Bad Request', 'request is invalid');
   }
-  log('error', 'unhandled api error');
+  log('error', 'unhandled api error', {}, error);
   return problem(reply, 500, 'Internal Server Error', 'request failed');
 }
 

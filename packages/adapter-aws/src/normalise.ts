@@ -38,7 +38,11 @@ export function normaliseService(service: JsonObject, clusterName: string): Json
   };
 }
 
-export function normaliseTasks(tasks: readonly JsonObject[]): JsonObject {
+export function normaliseTasks(
+  tasks: readonly JsonObject[],
+  requestedArns: readonly string[] = [],
+  failures: readonly JsonObject[] = [],
+): JsonObject {
   const normalised = tasks
     .map((task) => ({
       taskArn: readString(task, 'taskArn', 'TaskArn'),
@@ -49,7 +53,13 @@ export function normaliseTasks(tasks: readonly JsonObject[]): JsonObject {
       stoppedReason: readString(task, 'stoppedReason', 'StoppedReason') || null,
     }))
     .sort((left, right) => left.taskArn.localeCompare(right.taskArn));
-  return { tasks: normalised, complete: true };
+  const described = new Set(normalised.map((task) => task.taskArn).filter((arn) => arn.length > 0));
+  const failed = failures.filter((item) => readString(item, 'arn', 'Arn').length > 0);
+  const missingRequested = requestedArns.some((arn) => !described.has(arn));
+  return {
+    tasks: normalised,
+    complete: failed.length === 0 && !missingRequested,
+  };
 }
 
 export function normaliseTargetGroups(groups: readonly JsonObject[]): JsonObject {
@@ -116,7 +126,7 @@ export function normaliseMetrics(datapoints: readonly JsonObject[], complete: bo
     .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
   return {
     metricName: 'RunningTaskCount',
-    namespace: 'AWS/ECS',
+    namespace: 'ECS/ContainerInsights',
     datapoints: points,
     complete,
   };

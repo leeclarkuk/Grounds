@@ -20,6 +20,8 @@ import {
   ERROR_MESSAGES,
   FAKE_INVENTORY_KIND,
   backoffSeconds,
+  payloadDigestOf,
+  redactUnknown,
 } from '@grounds/domain';
 import {
   appliedMigrationIds,
@@ -848,5 +850,43 @@ describe('Build 0 control plane', () => {
     expect(detail.body).not.toMatch(/AKIA-NOT-A-REAL-KEY/);
     expect(detail.body).not.toMatch(/example-secret-value/);
     await app.close();
+  });
+
+  it('redacts mid-string and suffix secrets from stored JSON, events and digest inputs', async () => {
+    const seeded = await enqueueRun();
+    const accessKeyId = ['AKIA', 'IOSFODNN7EXAMPLE'].join('');
+    const mid = `request failed for ${accessKeyId} during collect`;
+    const suffix = `trace-${accessKeyId}`;
+    const raw = { diagnostic: mid, trailer: suffix, note: 'safe' };
+    const persisted = await db.store.withTransaction(async (tx) => {
+      const observation = await tx.persistObservation(
+        seeded.run,
+        {
+          id: randomUUID(),
+          kind: FAKE_INVENTORY_KIND,
+          payload: raw,
+          inaccessible: false,
+          operation: 'fake.DescribeInventory',
+          adapter: 'fixture',
+          requestDigest: 'redact-substring-test',
+        },
+        3600,
+      );
+      await tx.appendEvent({
+        aggregateType: 'assurance_run',
+        aggregateId: seeded.run.id,
+        type: 'diagnostic',
+        operationId: `redact-event:${seeded.run.id}`,
+        payload: { message: mid, trailer: suffix },
+        actorId: null,
+      });
+      return observation;
+    });
+    const stored = JSON.stringify(persisted.observation.payload);
+    expect(stored).not.toContain(accessKeyId);
+    expect(stored).toMatch(/REDACTED/);
+    expect(persisted.observation.payloadDigest).toBe(payloadDigestOf(redactUnknown(raw)));
+    const events = await db.store.listEvents('assurance_run', seeded.run.id);
+    expect(JSON.stringify(events)).not.toContain(accessKeyId);
   });
 });
