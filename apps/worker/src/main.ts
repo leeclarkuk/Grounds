@@ -93,3 +93,5 @@ export async function startWorkerFromEnv(env = process.env): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 }
+
+await startWorkerFromEnv();
