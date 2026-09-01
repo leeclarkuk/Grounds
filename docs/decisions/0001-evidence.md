@@ -32,6 +32,7 @@ The build-ready plan requires immutable, time-bounded, content-addressed observa
 
 - RFC 8785 vectors and stable SHA-256 digests.
 - Redaction-before-digest: a secret in the raw payload, including a mid-string or suffix access-key id, must not appear in payload digest inputs, stored JSON or events.
+- H6-1 logs: mid-string and suffix access-key ids must not appear in `log()` output, including message, fields and closed error detail. A `startsWith`-only or unredacted logger must fail.
 - Bounded envelope for oversize input; required truncated evidence is `UNKNOWN`.
 - Same content in one run inserts once; a second run may insert the same logical content under a different `run_id`.
 - Cross-organisation isolation: organisation id participates in the digest and in queries.

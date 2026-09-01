@@ -1,3 +1,5 @@
+import { REDACTED, redactUnknown, type JsonValue } from '@grounds/domain';
+
 export type LogFields = {
   readonly traceId?: string;
   readonly runId?: string;
@@ -9,25 +11,47 @@ export type LogFields = {
   readonly [key: string]: string | number | boolean | undefined;
 };
 
-const SECRET = /(password|secret|credential|authorization|token|accesskey|session)/i;
-
 export function log(
   level: 'info' | 'error' | 'warn',
   message: string,
   fields: LogFields = {},
+  error?: unknown,
 ): void {
-  const safe: { [key: string]: string | number | boolean } = { level, message };
+  const record: { [key: string]: JsonValue } = { level, message };
   for (const [key, value] of Object.entries(fields)) {
-    if (value === undefined || SECRET.test(key)) {
+    if (value === undefined) {
       continue;
     }
-    if (typeof value === 'string' && SECRET.test(value)) {
-      continue;
-    }
-    safe[key] = value;
+    record[key] = value;
+  }
+  if (error !== undefined) {
+    record['error'] = closedErrorDetail(error);
   }
   const stream = level === 'error' ? process.stderr : process.stdout;
-  stream.write(`${JSON.stringify(safe)}\n`);
+  stream.write(`${JSON.stringify(redactUnknown(record))}\n`);
+}
+
+function closedErrorDetail(error: unknown): JsonValue {
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message };
+  }
+  if (error !== null && typeof error === 'object' && !Array.isArray(error)) {
+    const record = error as { readonly name?: unknown; readonly message?: unknown };
+    const closed: { [key: string]: JsonValue } = {};
+    if (typeof record.name === 'string') {
+      closed['name'] = record.name;
+    }
+    if (typeof record.message === 'string') {
+      closed['message'] = record.message;
+    }
+    if (Object.keys(closed).length > 0) {
+      return closed;
+    }
+  }
+  if (typeof error === 'string' || typeof error === 'number' || typeof error === 'boolean') {
+    return error;
+  }
+  return REDACTED;
 }
 
 export class Metrics {
